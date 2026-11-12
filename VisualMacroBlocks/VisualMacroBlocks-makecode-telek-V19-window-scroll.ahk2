@@ -314,6 +314,7 @@ VMB_BuildGui() {
     c["AutoNorm"] := g.AddCheckbox("x+10 yp+5", "Normalize new windows while recording")
     c["AutoNorm"].Value := IniRead(s.Ini, "V17", "NormalizeOnSwitch", 1)
     c["Steady"] := g.AddCheckbox("x+10 yp", "Steady playback")
+    c["SizeStop"] := g.AddCheckbox("x+10 yp", "Stop if a window can't take its size")
     c["WhereInfo"] := g.AddText("x+10 yp w430 c606060 +0x4000", "")
 
     lbl["Data"] := g.AddText("xm y+14", "Data rows:")
@@ -396,6 +397,7 @@ VMB_BuildGui() {
     c["PauseInput"].OnEvent("Click", VMB_OnSettingChanged)
     c["LockSize"].OnEvent("Click", VMB_OnSettingChanged)
     c["Steady"].OnEvent("Click", VMB_OnSettingChanged)
+    c["SizeStop"].OnEvent("Click", VMB_OnSettingChanged)
     c["DefaultTarget"].OnEvent("Change", VMB_OnSettingChanged)
     c["PickTarget"].OnEvent("Click", V16_PickDefaultTarget)
     c["RowFrom"].OnEvent("Change", VMB_OnSettingChanged)
@@ -3296,6 +3298,7 @@ VMB_SettingsToControls() {
     s.Ctl["PauseInput"].Value := m.Get("pauseOnUserInput", 1) ? 1 : 0
     s.Ctl["LockSize"].Value := m.Get("lockWindowSize", 1) ? 1 : 0
     s.Ctl["Steady"].Value := m.Get("steady", 0) ? 1 : 0
+    s.Ctl["SizeStop"].Value := m.Get("sizeMismatch", "") = "stop" ? 1 : 0
     s.Ctl["DefaultTarget"].Value := m.Get("defaultTarget", "")
     dataSet := m.Get("data", "")
     hasData := dataSet is Map && dataSet.Get("path", "") != ""
@@ -3333,6 +3336,7 @@ VMB_ControlsToSettings() {
     m["pauseOnUserInput"] := s.Ctl["PauseInput"].Value ? 1 : 0
     m["lockWindowSize"] := s.Ctl["LockSize"].Value ? 1 : 0
     VM__SetOrDelete(m, "steady", s.Ctl["Steady"].Value ? 1 : "")
+    VM__SetOrDelete(m, "sizeMismatch", s.Ctl["SizeStop"].Value ? "stop" : "")
     VM__SetOrDelete(m, "defaultTarget", Trim(s.Ctl["DefaultTarget"].Value))
     dataSet := m.Get("data", "")
     if dataSet is Map {
@@ -12654,6 +12658,8 @@ V17_NormalizeWindow(node, hwnd, ctx) {
     if msg != "" {
         exe := "window"
         try exe := WinGetProcessName(id)
+        if ctx.HasOwnProp("Settings") && ctx.Settings.Get("sizeMismatch", "") = "stop"     ; V19: stop instead of a note
+            throw Error("The window " . V19_MismatchText(msg) . " Fix the window, then retry this step.")
         V17_Warn(ctx, "Step #" . ctx.Index . " (" . exe . ") " . msg)
     }
 }
@@ -13442,6 +13448,10 @@ V19_RunSizeTrials(trials) {
     return snapped ? "  This window only takes certain sizes. Saved the size it settles at." : ""
 }
 
+; @summary The "size is off" note without its trailing " Kept going." (for the message when the run stops instead).
+; @tags macro, window, normalize, v19
+V19_MismatchText(msg) => SubStr(msg, -12) = " Kept going." ? SubStr(msg, 1, -12) : msg
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -14129,6 +14139,10 @@ V4_SelfTest(path) {
         check("V19 size trial: a closed window is skipped", V19_RunSizeTrials([{Hwnd: 0x7FFFFFF0, Node: v19N}]) . "|" . v19N.Get("sizeChecked", 0), "|0")
         check("V19 size trial: a maximized step is skipped", V19_RunSizeTrials([{Hwnd: 0, Node: Map("maximize", 1)}]), "")
         check("V19 size trial: an auto-picked window without a step is skipped", V19_RunSizeTrials([{Hwnd: 0, Node: 0}]), "")
+        check("V19 size stop: the note loses 'Kept going.'",
+            V19_MismatchText(V17_SizeNote(900, 700, 640, 480, true)), "stayed 640x480 instead of 900x700 (it has a maximum size or does not fit the screen, or the display scaling is different).")
+        check("V19 size stop: other text is kept as it is", V19_MismatchText("stayed 1x1."), "stayed 1x1.")
+        check("V19 size stop: new macros keep going (off by default)", VMF_NewMacro()["settings"].Get("sizeMismatch", ""), "")
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
