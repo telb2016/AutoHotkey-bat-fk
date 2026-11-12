@@ -12696,7 +12696,7 @@ V17_Log(text, fresh := false) {
 
 ; Recording: which window the last step went to, and which windows already got a Normalize step.
 V17_RecWin() {
-    static r := {On: false, Last: 0, Seen: Map(), MacroHwnd: 0, AutoPick: false, AutoTarget: "", AutoGeo: 0}
+    static r := {On: false, Last: 0, Seen: Map(), MacroHwnd: 0, AutoPick: false, AutoTarget: "", AutoGeo: 0, Trial: []}
     return r
 }
 
@@ -12706,7 +12706,7 @@ V17_RecWin() {
 V17_RecWinStart() {
     s := VMB(), r := V17_RecWin()
     r.On := s.Ctl.Has("AutoNorm") && s.Ctl["AutoNorm"].Value
-    r.Seen := Map(), r.Last := 0, r.MacroHwnd := 0
+    r.Seen := Map(), r.Last := 0, r.MacroHwnd := 0, r.Trial := []
     r.AutoPick := r.On && V18_CanAutoPick(), r.AutoTarget := "", r.AutoGeo := 0
     target := Trim(s.Macro["settings"].Get("defaultTarget", ""))
     if target != "" {
@@ -12740,6 +12740,7 @@ V17_RecNoteWindow(hwnd) {
             if target != "" {
                 r.AutoGeo := V17_WindowGeometry(hwnd)
                 r.AutoTarget := target, r.MacroHwnd := hwnd, r.Seen[hwnd] := 1, r.Last := hwnd
+                r.Trial.Push({Hwnd: hwnd, Node: 0})     ; V19: its Normalize step is made when recording stops
                 return
             }
         }
@@ -12751,8 +12752,11 @@ V17_RecNoteWindow(hwnd) {
     geo := 0
     if !r.Seen.Has(hwnd)
         try geo := V17_WindowGeometry(hwnd)
-    for node in V17_SwitchSteps(selector, geo)
+    for node in V17_SwitchSteps(selector, geo) {
         V4_RecordAdd(node)
+        if node.Get("type", "") = "det_normalize_win"      ; V19: its size is tested when recording stops
+            r.Trial.Push({Hwnd: hwnd, Node: node})
+    }
     r.Seen[hwnd] := 1
     r.Last := hwnd
 }
@@ -13256,8 +13260,15 @@ V18_FinishRecording() {
         for key, value in V17_GeometryFields(r.AutoGeo)
             norm[key] := value
         norm["target"] := ""
-        note := "  Macro window: " . r.AutoTarget . " - step #1 puts it back to " . V17_NormText(norm) . "."
+        for trial in r.Trial                    ; V19: the auto-picked window's Normalize step exists only now
+            if trial.Hwnd = r.MacroHwnd && !IsObject(trial.Node)
+                trial.Node := norm
+        trialNote := V19_RunSizeTrials(r.Trial)    ; first, so the size in the note below is the saved one
+        r.Trial := []
+        note := "  Macro window: " . r.AutoTarget . " - step #1 puts it back to " . V17_NormText(norm) . "." . trialNote
     }
+    note .= V19_RunSizeTrials(r.Trial)          ; V19: windows that got a Normalize step while recording
+    r.Trial := []
     r.AutoTarget := "", r.AutoGeo := 0, r.AutoPick := false
     VMB_SettingsToControls()
     return note
@@ -13368,6 +13379,67 @@ V19_WaitSize(id, wantW, wantH, ctx, maxMs := 2000, byPos := false) {
         else
             Sleep(50)
     }
+}
+
+; @summary Result of a size trial: does the window go back to its recorded size after being made bigger?
+; @returns {Holds (back within 1 px of the recorded size), W, H (the size it went back to), CanGrow}
+; @tags macro, window, normalize, record, v19
+V19_TrialResult(recW, recH, grewW, grewH, backW, backH) {
+    return {Holds: Abs(backW - recW) <= 1 && Abs(backH - recH) <= 1, W: backW, H: backH,
+        CanGrow: grewW > recW || grewH > recH}
+}
+
+; @summary Recording stopped: makes the window 60 px bigger, then puts it back, and reads which size it takes.
+;          Always ends by moving the window back to where it was. Any error = {Holds: true} (never blocks the user).
+; @returns V19_TrialResult object
+; @tags macro, window, normalize, record, v19
+V19_SizeTrial(hwnd) {
+    id := "ahk_id " . hwnd, res := {Holds: true}, read := false
+    try {
+        WinGetPos(&wx, &wy, &ww, &wh, id)
+        read := true
+        WinMove(wx, wy, ww + 60, wh + 60, id)
+        V19_WaitSize(id, ww + 60, wh + 60, 0)
+        WinGetPos(, , &grewW, &grewH, id)
+        WinMove(wx, wy, ww, wh, id)
+        V19_WaitSize(id, ww, wh, 0)
+        WinGetPos(, , &backW, &backH, id)
+        res := V19_TrialResult(ww, wh, grewW, grewH, backW, backH)
+    }
+    if read
+        try WinMove(wx, wy, ww, wh, id)
+    return res
+}
+
+; @summary Recording stopped: runs the size trial once for each window that got a Normalize step and is still open,
+;          resizable and not maximized (not this script's windows). A window that snaps to its own sizes gets the
+;          size it settles at saved in its Normalize step.
+; @returns a note for the status bar, or ""
+; @tags macro, window, normalize, record, v19
+V19_RunSizeTrials(trials) {
+    snapped := false
+    for trial in trials {
+        node := trial.Node
+        if !IsObject(node) || node.Get("sizeChecked", 0) || V4_Bool(node.Get("maximize", 0))
+            continue
+        open := false
+        try {
+            id := "ahk_id " . trial.Hwnd
+            if WinExist(id) && !V18_OwnWindow(trial.Hwnd) && WinGetMinMax(id) = 0 && V17_IsResizable(WinGetStyle(id)) {
+                WinGetPos(, , &curW, &curH, id)
+                open := true
+            }
+        }
+        if !open || Abs(curW - node.Get("width", 0)) > 1 || Abs(curH - node.Get("height", 0)) > 1
+            continue        ; closed, fixed-size, maximized - or resized after its step was recorded
+        res := V19_SizeTrial(trial.Hwnd)
+        node["sizeChecked"] := 1
+        if !res.Holds {
+            node["width"] := res.W, node["height"] := res.H
+            snapped := true
+        }
+    }
+    return snapped ? "  This window only takes certain sizes. Saved the size it settles at." : ""
 }
 
 ; ============================================================================
@@ -14046,6 +14118,17 @@ V4_SelfTest(path) {
         check("V19 size wait: reaches the size on the last read only keeps waiting", V19_SizeVerdict([[0, 800, 600], [50, 850, 650], [100, 900, 700]], 900, 700), "")
         check("V19 size wait: no reads yet keeps waiting", V19_SizeVerdict([], 900, 700), "")
         check("V19 size wait: a window that is gone times out", V19_WaitSize("ahk_id 0x7FFFFFF0", 900, 700, 0, 200), "timeout")
+        v19T := V19_TrialResult(800, 600, 860, 660, 800, 600)
+        check("V19 size trial: a window that goes back holds", v19T.Holds . "|" . v19T.W . "x" . v19T.H . "|" . v19T.CanGrow, "1|800x600|1")
+        check("V19 size trial: within 1 px still holds", V19_TrialResult(800, 600, 860, 660, 801, 599).Holds, 1)
+        v19T := V19_TrialResult(803, 610, 900, 700, 800, 600)
+        check("V19 size trial: a window that snaps does not hold", v19T.Holds . "|" . v19T.W . "x" . v19T.H, "0|800x600")
+        check("V19 size trial: a window at its biggest size cannot grow", V19_TrialResult(800, 600, 800, 600, 800, 600).CanGrow, 0)
+        check("V19 size trial: a window that is gone never blocks", V19_SizeTrial(0x7FFFFFF0).Holds, 1)
+        v19N := Map("type", "det_normalize_win", "width", 800, "height", 600, "maximize", 0)
+        check("V19 size trial: a closed window is skipped", V19_RunSizeTrials([{Hwnd: 0x7FFFFFF0, Node: v19N}]) . "|" . v19N.Get("sizeChecked", 0), "|0")
+        check("V19 size trial: a maximized step is skipped", V19_RunSizeTrials([{Hwnd: 0, Node: Map("maximize", 1)}]), "")
+        check("V19 size trial: an auto-picked window without a step is skipped", V19_RunSizeTrials([{Hwnd: 0, Node: 0}]), "")
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
