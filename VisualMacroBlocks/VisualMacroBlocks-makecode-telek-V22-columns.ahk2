@@ -215,7 +215,8 @@ VMB() {
         ItemColor: Map(), PalColor: Map(), PalDesc: Map(), Undo: [], Redo: [], Clip: "", PlayFlat: [], HiItem: 0,
         FontSize: 9, Checked: Map(), AnchorNode: 0, CloseNotified: false, AutoSavePath: "", LastSavedAt: "",
         LastEditedStep: "", IdleHud: 0, QuickLookGui: 0, Insp: 0, InspShown: 1, ShowMeaning: 1,
-        Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map()}
+        Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map(),
+        Columns: 1, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: ""}
     return s
 }
 
@@ -358,6 +359,7 @@ VMB_BuildGui() {
     c["Web"].OnEvent("Click", V4_WebPanel)
     s.InspShown := Integer(IniRead(s.Ini, "V13", "ShowSettingsPanel", 1))
     s.ShowMeaning := Integer(IniRead(s.Ini, "V13", "ExplainSteps", 1))
+    s.Columns := Integer(IniRead(s.Ini, "V22", "Columns", 1)) ? 1 : 0          ; V22: step list in fixed columns
     c["InspToggle"] := g.AddButton("x+6 w120 h24", s.InspShown ? "Settings panel ◂" : "Settings panel ▸")
     c["InspToggle"].OnEvent("Click", V13_ToggleInspector)
     c["Search"] := g.AddEdit("xm y+6 w230")
@@ -366,7 +368,7 @@ VMB_BuildGui() {
     s.Pal := g.AddTreeView("xm y+4 w230 h372")
     s.TV := g.AddTreeView("x" . (sx + 240) . " y" . sy . " w940 h400 Checked")
     s.FontSize := Integer(IniRead(s.Ini, "Blocks", "FontSize", 9))
-    s.TV.SetFont("s" . s.FontSize)
+    V22_ApplyTreeFont(false)            ; V22: Consolas + exact indent in column mode
     V13_BuildInspector(g)
     c["Edit"] := g.AddButton("xm w62", "&Edit...")
     c["Vary"] := g.AddButton("x+5 w118", "⚡ &Vary + Loop...")
@@ -651,6 +653,8 @@ VMB_Refresh(selectNode := "") {
     for i, step in VMF_Flatten(s.Macro["blocks"])
         s.FlatIndex[step] := i
     s.AppShow := V21_AppRuns(VMF_Flatten(s.Macro["blocks"]))     ; V21: say the program only when it changes
+    r := V22_FillApps(VMF_Flatten(s.Macro["blocks"]), s.Macro["settings"])     ; V22: the Program column, every row
+    s.ColApp := r.App, s.ColStarts := r.Starts
     tv.Opt("-Redraw")
     tv.Delete()
     s.Items := Map(), s.NodeItem := Map(), s.ItemColor := Map(), s.HiItem := 0
@@ -663,8 +667,9 @@ VMB_Refresh(selectNode := "") {
     V17_UpdateWinInfo()
 }
 
-VMB_AddBody(list, parentId, owner, emptyText := "(empty - drag steps here)", off := false) {
+VMB_AddBody(list, parentId, owner, emptyText := "(empty - drag steps here)", off := false, depth := 0) {
     s := VMB()
+    cols := s.Columns && s.ShowMeaning              ; V22: depth = tree level of the rows added here
     if !list.Length {
         id := s.TV.Add(emptyText, parentId)
         s.Items[id] := {Kind: "empty", List: list, Owner: owner}
@@ -674,31 +679,31 @@ VMB_AddBody(list, parentId, owner, emptyText := "(empty - drag steps here)", off
     for i, node in list {
         isBox := VMF_IsContainer(node)
         nodeOff := off || node.Get("disabled", 0)
-        id := s.TV.Add(VMB_NodeLabel(node), parentId, isBox ? "Bold Expand" : "")
+        id := s.TV.Add(VMB_NodeLabel(node, depth), parentId, isBox ? "Bold Expand" : "")
         s.Items[id] := {Kind: "node", Node: node, List: list, Index: i, Owner: owner}
         s.NodeItem[node] := id
         if s.Checked.Has(node)
             s.TV.Modify(id, "Check")
         s.ItemColor[id] := VMB_KindColor(node.Get("type", ""), nodeOff)
         if isBox {
-            VMB_AddBody(node["body"], id, node, , nodeOff)
+            VMB_AddBody(node["body"], id, node, , nodeOff, depth + 1)
             if node["type"] = "if" {
                 VMF_Children(node)
                 prev := node["body"]
                 for k, elif in VMF_Elifs(node) {
-                    label := " ELSE IF " . VMF__CondText(elif)
+                    label := (cols ? V22_Margin(depth + 1, s.IndentChars) : " ") . "ELSE IF " . VMF__CondText(elif)
                         . (elif.Get("cond", "image") = "image" ? "      [image " . VM__TargetText(elif) . "]" : "") . " "
                     elifId := s.TV.Add(label, id, "Bold Expand")
                     s.Items[elifId] := {Kind: "elif", Node: node, Elif: elif, Index: k, List: elif["body"], Prev: prev,
                         Owner: node}
                     s.ItemColor[elifId] := VMB_KindColor("elif", nodeOff)
-                    VMB_AddBody(elif["body"], elifId, node, , nodeOff)
+                    VMB_AddBody(elif["body"], elifId, node, , nodeOff, depth + 2)
                     prev := elif["body"]
                 }
-                elseId := s.TV.Add(" ELSE (when none of the above is true) ", id, "Bold Expand")
+                elseId := s.TV.Add((cols ? V22_Margin(depth + 1, s.IndentChars) : " ") . "ELSE (when none of the above is true) ", id, "Bold Expand")
                 s.Items[elseId] := {Kind: "else", Node: node, List: node["else"], Prev: prev, Owner: node}
                 s.ItemColor[elseId] := VMB_KindColor("else", nodeOff)
-                VMB_AddBody(node["else"], elseId, node, , nodeOff)
+                VMB_AddBody(node["else"], elseId, node, , nodeOff, depth + 2)
             }
         }
     }
@@ -706,11 +711,17 @@ VMB_AddBody(list, parentId, owner, emptyText := "(empty - drag steps here)", off
 
 ; @summary Tree label: "#3   Click  ...   [exe - title]" for steps, the block text for control blocks; "(off)" when disabled.
 ; @tags macro, gui, blocks
-VMB_NodeLabel(node) {
+VMB_NodeLabel(node, depth := unset) {
     s := VMB()
     off := (node.Get("breakpoint", 0) ? "●  " : "") . (node.Get("disabled", 0) ? "(off)  " : "")
+    cols := s.Columns && s.ShowMeaning              ; V22: fixed columns
+    if cols && !IsSet(depth)
+        depth := s.NodeItem.Has(node) ? V22_DepthOf(s.NodeItem[node]) : 0
     if VMF_IsStep(node) {
         num := s.FlatIndex.Get(node, "?"), lastNote := s.LastNotes.Get(num, "")      ; V21: a note in the last run
+        if cols
+            return V22_Row(num, s.ColApp is Map ? s.ColApp.Get(node, "") : "", s.ColStarts is Map && s.ColStarts.Has(node),
+                V22_WaitText(node), V22_Marks(node, lastNote), off . V22_Sentence(node, lastNote), depth, s.IndentChars) . " "
         mark := lastNote = "" ? "" : " ⚠", noteTag := lastNote = "" ? "" : V21_NoteTag(lastNote)
         line := s.ShowMeaning ? V20_StepLine(node) : ""        ; V20: one plain sentence per step
         if line != ""
@@ -727,6 +738,8 @@ VMB_NodeLabel(node) {
         text .= "      (choose a data file above!)"
     if (t = "until" || t = "if") && node.Get("cond", "image") = "image"
         text .= "      [image " . VM__TargetText(node) . "]"
+    if cols
+        return V22_Margin(depth, s.IndentChars) . off . text . " "
     return " " . off . text . " "
 }
 
@@ -2538,7 +2551,7 @@ VMB_CodeView(*) {
 VMB_Zoom(delta) {
     s := VMB()
     s.FontSize := delta = 0 ? 9 : VF_Clamp(s.FontSize + delta, 7, 20)
-    s.TV.SetFont("s" . s.FontSize)
+    V22_ApplyTreeFont()                 ; V22: Consolas + exact indent in column mode
     IniWrite(s.FontSize, s.Ini, "Blocks", "FontSize")
     VMB_Status("Tree text size " . s.FontSize . ".")
 }
@@ -11597,6 +11610,8 @@ V13_InspCommit(*) {
         VMB_Refresh()                    ; recolours / relabels everything inside
     } else {
         s.AppShow := V21_AppRuns(VMF_Flatten(s.Macro["blocks"]))     ; V21: keep the "in <program>" marks up to date
+        r := V22_FillApps(VMF_Flatten(s.Macro["blocks"]), s.Macro["settings"])     ; V22: and the Program column
+        s.ColApp := r.App, s.ColStarts := r.Starts
         s.TV.Modify(s.NodeItem[owner], , VMB_NodeLabel(owner))
         V13_InspLoad(false)
     }
@@ -14001,6 +14016,8 @@ V21_AppRuns(flatSteps) {
 ;          is no editor map or no entry (so a loose step, for example in the self-test, always names its program).
 ; @tags macro, explain, gui, v21
 V21_ShowApp(node) {
+    if VMB().Gui && VMB().Columns       ; V22: column mode in the editor (with no editor: as in V21)
+        return false
     appShow := VMB().AppShow
     return appShow is Map ? appShow.Get(node, true) : true
 }
@@ -14366,17 +14383,17 @@ V22_WaitText(node) {
 ;          changes each round, whatever window is active, has a note, had a note in the last run.
 ; @tags macro, gui, columns, v22
 V22_Marks(node, lastNote := "") {
-    out := ""
+    chars := V22_MarkChars(), out := ""
     if node.Get("scroll", "") is Map
-        out .= "↕"
+        out .= chars["scroll"]
     if V8_VarySummaryBadge(node) != ""
-        out .= "⚡"
+        out .= chars["vary"]
     if node.Get("winMatch", "") = "active"
-        out .= "◇"
+        out .= chars["active"]
     if node.Get("note", "") != ""
-        out .= "✎"
+        out .= chars["note"]
     if lastNote != ""
-        out .= "⚠"
+        out .= chars["warn"]
     return out
 }
 
@@ -14399,7 +14416,7 @@ V22_Row(num, app, startsApp, wait, marks, sentence, depth, indentChars) {
     cols := V22_Cols()
     numCol := V22_Pad(num, cols[1].W)
     if startsApp && num != 1
-        numCol := SubStr(numCol, 1, cols[1].W - 1) . "►"
+        numCol := SubStr(numCol, 1, cols[1].W - 1) . V22_MarkChars()["start"]
     return V22_Margin(depth, indentChars) . numCol . " " . V22_Pad(app, cols[2].W) . " " . V22_Pad(wait, cols[3].W)
         . " " . V22_Pad(marks, cols[4].W) . " " . sentence
 }
@@ -14410,6 +14427,70 @@ V22_Header(indentChars) {
     cols := V22_Cols()
     return V22_Margin(0, indentChars) . V22_Pad("#", cols[1].W) . " " . V22_Pad("Program", cols[2].W) . " "
         . V22_Pad("Waits", cols[3].W) . " " . V22_Pad("Marks", cols[4].W) . " What it does"
+}
+
+; @summary The mark characters of the Marks column and the "►" of the number column, in one place. plain = 1 gives
+;          plain ASCII letters instead (for a PC where the symbols show as boxes or are too wide). With no argument the
+;          ini value [V22] PlainMarks (default 0) decides; it is read once, so a change needs a restart.
+; @tags macro, gui, columns, v22
+V22_MarkChars(plain := "") {
+    static fromIni := 0
+    if plain = "" {
+        if !fromIni {
+            ini := VMB().Ini
+            fromIni := V22_MarkChars(ini != "" && IniRead(ini, "V22", "PlainMarks", 0) = "1" ? 1 : 0)
+        }
+        return fromIni
+    }
+    return plain ? Map("scroll", "S", "vary", "V", "active", "A", "note", "N", "warn", "!", "start", ">")
+        : Map("scroll", "↕", "vary", "⚡", "active", "◇", "note", "✎", "warn", "⚠", "start", "►")
+}
+
+; @summary How deep a tree item is: the number of tree levels above it (0 = top level). ELSE rows and "(empty)"
+;          placeholders are tree items too, so this counts tree levels, not block levels.
+; @tags macro, gui, columns, v22
+V22_DepthOf(item) {
+    s := VMB(), depth := 0
+    while item && (item := s.TV.GetParent(item))
+        depth += 1
+    return depth
+}
+
+; @summary Sets the macro tree's font - Consolas in column mode, else Segoe UI - and, in column mode, makes the tree's
+;          indent exactly s.IndentChars characters wide (raised when Windows will not take an indent that small).
+;          Leaving column mode puts the tree's own indent back. refresh = rebuild the rows when IndentChars changed.
+; @tags macro, gui, columns, v22
+V22_ApplyTreeFont(refresh := true) {
+    static defaultIndent := 0
+    s := VMB()
+    if !s.TV
+        return
+    if !defaultIndent
+        defaultIndent := SendMessage(0x1106, 0, 0, s.TV)                  ; TVM_GETINDENT, before any change
+    s.TV.SetFont("s" . s.FontSize, s.Columns ? "Consolas" : "Segoe UI")
+    if !s.Columns {
+        SendMessage(0x1107, defaultIndent, 0, s.TV)                        ; TVM_SETINDENT
+        return
+    }
+    hFont := SendMessage(0x31, 0, 0, s.TV)                                 ; WM_GETFONT
+    hdc := DllCall("GetDC", "Ptr", s.TV.Hwnd, "Ptr")
+    oldFont := DllCall("SelectObject", "Ptr", hdc, "Ptr", hFont, "Ptr")
+    ext := Buffer(8, 0)
+    DllCall("GetTextExtentPoint32W", "Ptr", hdc, "Str", "0000000000", "Int", 10, "Ptr", ext)
+    DllCall("SelectObject", "Ptr", hdc, "Ptr", oldFont, "Ptr")
+    DllCall("ReleaseDC", "Ptr", s.TV.Hwnd, "Ptr", hdc)
+    charW := Max(1, NumGet(ext, 0, "Int") / 10)
+    before := s.IndentChars
+    want := Round(charW * s.IndentChars)
+    SendMessage(0x1107, want, 0, s.TV)
+    actual := SendMessage(0x1106, 0, 0, s.TV)
+    if actual > want {                                                     ; Windows refused an indent this small
+        s.IndentChars := Ceil(actual / charW)
+        SendMessage(0x1107, Round(charW * s.IndentChars), 0, s.TV)
+    }
+    s.IndentSeen := "char " . charW . " px, asked " . want . " px, got " . actual . " px, " . s.IndentChars . " characters"
+    if refresh && s.IndentChars != before
+        VMB_Refresh()
 }
 
 ; ============================================================================
@@ -15376,6 +15457,12 @@ V4_SelfTest(path) {
             . V22_Sentence(Map("type", "delay", "ms", 500, "note", "wait"), "Step #3: slow"),
             "Wait 500 ms|" . VM_StepSummary(Map("type", "input_keydelay", "delay", 30, "duration", 30))[1] . "   " . VM_StepSummary(Map("type", "input_keydelay", "delay", 30, "duration", 30))[3]
             . "|Wait 500 ms   // wait   ⚠ last run: slow")
+        v22M := V22_MarkChars(0), v22P := V22_MarkChars(1)
+        check("V22 mark characters: symbols and plain", v22M["scroll"] . v22M["vary"] . v22M["active"] . v22M["note"] . v22M["warn"] . v22M["start"] . "|"
+            . v22P["scroll"] . v22P["vary"] . v22P["active"] . v22P["note"] . v22P["warn"] . v22P["start"], "↕⚡◇✎⚠►|SVAN!>")
+        check("V22 marks come from the mark characters", V22_Marks(Map("type", "click", "note", "x"), "Step #1: y"), V22_MarkChars()["note"] . V22_MarkChars()["warn"])
+        check("V22 no editor: the program stays in the sentence", V20_StepSentence(Map("type", "keys", "keys", "{Enter}", "win", Map("exe", "notepad.exe"))),
+            "Press Enter (OK / submit / new line) in notepad")
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
