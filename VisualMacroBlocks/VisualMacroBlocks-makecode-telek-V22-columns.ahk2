@@ -14372,16 +14372,26 @@ V22_AppOf(node, settings := 0) {
 }
 
 ; @summary The Program column for every step: a step with no program of its own (a Delay ...) takes the program of
-;          the nearest earlier step that had one. flatSteps = VMF_Flatten(blocks); blocks that are not steps are skipped.
+;          the nearest earlier step that had one. V22.1: a det_* / input_* step with a blank or missing target shows the
+;          program of the last "Use Window From Here On" before it (blank = the Macro window), in list order. flatSteps = VMF_Flatten(blocks); blocks that are not steps are skipped.
 ; @returns {App: Map step -> program text, Starts: Map step -> true for the first step and each step whose program
 ;          differs (upper / lower case ignored) from the step before}
 ; @tags macro, gui, columns, v22
 V22_FillApps(flatSteps, settings := 0) {
-    apps := Map(), starts := Map(), prevApp := "", isFirst := true
+    apps := Map(), starts := Map(), prevApp := "", isFirst := true, useTarget := ""
     for step in flatSteps {
         if !(step is Map) || !VMF_IsStep(step)
             continue
         own := V22_AppOf(step, settings)
+        t := step.Get("type", "")
+        if t = "det_use_window"                          ; V22.1: later blank-target steps follow this window (display only,
+            useTarget := Trim(String(step.Get("target", "")))        ; the same rule as V16_FallbackTarget at play time)
+        else if (SubStr(t, 1, 4) = "det_" || SubStr(t, 1, 6) = "input_") && Trim(String(step.Get("target", ""))) = ""
+            && !(step.Get("win", "") is Map && step["win"].Get("exe", "") != "") {
+            follow := useTarget != "" ? useTarget : (settings is Map ? Trim(settings.Get("defaultTarget", "")) : "")
+            if follow != ""
+                own := StrLower(V20_TargetName(follow))
+        }
         filled := own != "" ? own : prevApp
         apps[step] := filled
         if isFirst || filled != prevApp
@@ -15571,6 +15581,18 @@ V4_SelfTest(path) {
         v22R := V22_FillApps(v22S)
         check("V22 a Delay takes the program before it", v22R.App[v22S[2]] . "|" . v22R.Starts.Has(v22S[2]) . v22R.Starts.Has(v22S[4]) . "|" . v22R.App.Has(v22S[3]) . "|" . v22R.App.Count,
             "notepad|00|0|3")
+        v22S := [Map("type", "det_use_window", "target", "ahk_exe b.exe"), Map("type", "det_normalize_win", "target", ""), Map("type", "input_send")]
+        v22R := V22_FillApps(v22S, v22Set)
+        check("V22.1 Use Window B, then blank-target steps -> b", v22R.App[v22S[1]] . "," . v22R.App[v22S[2]] . "," . v22R.App[v22S[3]], "b,b,b")
+        v22S := [Map("type", "det_use_window", "target", "ahk_exe b.exe"), Map("type", "det_use_window", "target", ""), Map("type", "det_normalize_win", "target", "")]
+        v22R := V22_FillApps(v22S, v22Set)
+        check("V22.1 Use Window blank, then Normalize -> the Macro window's program", v22R.App[v22S[1]] . "," . v22R.App[v22S[2]] . "," . v22R.App[v22S[3]], "b,notepad,notepad")
+        v22S := [Map("type", "det_normalize_win", "target", ""), Map("type", "input_send", "target", " "), Map("type", "det_normalize_win", "target", "ahk_exe c.exe")]
+        v22R := V22_FillApps(v22S, v22Set)
+        check("V22.1 no Use Window at all -> the Macro window's program; own target kept", v22R.App[v22S[1]] . "," . v22R.App[v22S[2]] . "," . v22R.App[v22S[3]], "notepad,notepad,c")
+        v22S := [Map("type", "det_use_window", "target", "ahk_exe b.exe"), Map("type", "det_normalize_win", "target", "ahk_exe c.exe"), Map("type", "click", "win", Map("exe", "d.exe")), Map("type", "det_normalize_win", "target", "")]
+        v22R := V22_FillApps(v22S, v22Set)
+        check("V22.1 steps with their own window / target are unchanged", v22R.App[v22S[2]] . "," . v22R.App[v22S[3]] . "," . v22R.App[v22S[4]], "c,d,b")
         v22S := [Map("type", "delay", "ms", 1), Map("type", "delay", "ms", 2)]
         v22R := V22_FillApps(v22S)
         check("V22 no program at all", v22R.App[v22S[1]] . v22R.App[v22S[2]] . "|" . v22R.Starts.Count, "|1")
