@@ -220,7 +220,7 @@ VMB() {
         FontSize: 9, Checked: Map(), AnchorNode: 0, CloseNotified: false, AutoSavePath: "", LastSavedAt: "",
         LastEditedStep: "", IdleHud: 0, QuickLookGui: 0, Insp: 0, InspShown: 1, ShowMeaning: 1,
         Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map(),
-        Columns: 1, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: ""}
+        Columns: 1, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0}
     return s
 }
 
@@ -659,6 +659,7 @@ VMB_Refresh(selectNode := "") {
     for i, step in VMF_Flatten(s.Macro["blocks"])
         s.FlatIndex[step] := i
     s.AppShow := V21_AppRuns(VMF_Flatten(s.Macro["blocks"]))     ; V21: say the program only when it changes
+    s.MaxDepth := V22_MaxDepth(s.Macro["blocks"])               ; V22.1: the left margin is sized to the deepest row
     r := V22_FillApps(VMF_Flatten(s.Macro["blocks"]), s.Macro["settings"])     ; V22: the Program column, every row
     s.ColApp := r.App, s.ColStarts := r.Starts
     tv.Opt("-Redraw")
@@ -698,7 +699,7 @@ VMB_AddBody(list, parentId, owner, emptyText := "(empty - drag steps here)", off
                 VMF_Children(node)
                 prev := node["body"]
                 for k, elif in VMF_Elifs(node) {
-                    label := (cols ? V22_Margin(depth + 1, s.IndentChars) : " ") . "ELSE IF " . VMF__CondText(elif)
+                    label := (cols ? V22_Margin(depth + 1, s.IndentChars, s.MaxDepth) : " ") . "ELSE IF " . VMF__CondText(elif)
                         . (elif.Get("cond", "image") = "image" ? "      [image " . VM__TargetText(elif) . "]" : "") . " "
                     elifId := s.TV.Add(label, id, "Bold Expand")
                     s.Items[elifId] := {Kind: "elif", Node: node, Elif: elif, Index: k, List: elif["body"], Prev: prev,
@@ -707,7 +708,7 @@ VMB_AddBody(list, parentId, owner, emptyText := "(empty - drag steps here)", off
                     VMB_AddBody(elif["body"], elifId, node, , nodeOff, depth + 2)
                     prev := elif["body"]
                 }
-                elseId := s.TV.Add((cols ? V22_Margin(depth + 1, s.IndentChars) : " ") . "ELSE (when none of the above is true) ", id, "Bold Expand")
+                elseId := s.TV.Add((cols ? V22_Margin(depth + 1, s.IndentChars, s.MaxDepth) : " ") . "ELSE (when none of the above is true) ", id, "Bold Expand")
                 s.Items[elseId] := {Kind: "else", Node: node, List: node["else"], Prev: prev, Owner: node}
                 s.ItemColor[elseId] := VMB_KindColor("else", nodeOff)
                 VMB_AddBody(node["else"], elseId, node, , nodeOff, depth + 2)
@@ -728,7 +729,7 @@ VMB_NodeLabel(node, depth := unset) {
         num := s.FlatIndex.Get(node, "?"), lastNote := s.LastNotes.Get(num, "")      ; V21: a note in the last run
         if cols
             return V22_Row(num, s.ColApp is Map ? s.ColApp.Get(node, "") : "", s.ColStarts is Map && s.ColStarts.Has(node),
-                V22_WaitText(node), V22_Marks(node, lastNote), off . V22_Sentence(node, lastNote), depth, s.IndentChars) . " "
+                V22_WaitText(node), V22_Marks(node, lastNote), off . V22_Sentence(node, lastNote), depth, s.IndentChars, s.MaxDepth) . " "
         mark := lastNote = "" ? "" : " ⚠", noteTag := lastNote = "" ? "" : V21_NoteTag(lastNote)
         line := s.ShowMeaning ? V20_StepLine(node) : ""        ; V20: one plain sentence per step
         if line != ""
@@ -746,7 +747,7 @@ VMB_NodeLabel(node, depth := unset) {
     if (t = "until" || t = "if") && node.Get("cond", "image") = "image"
         text .= "      [image " . VM__TargetText(node) . "]"
     if cols
-        return V22_Margin(depth, s.IndentChars) . off . text . " "
+        return V22_Margin(depth, s.IndentChars, s.MaxDepth) . off . text . " "
     return " " . off . text . " "
 }
 
@@ -14343,11 +14344,12 @@ V22_Cols() {
     return cols
 }
 
-; @summary The spaces in front of a row: 8 * indentChars for a top-level row, depth * indentChars fewer for a
-;          deeper row (the tree's own indent makes up the difference), never fewer than none.
+; @summary The spaces in front of a row: maxDepth * indentChars for a top-level row, depth * indentChars fewer for a
+;          deeper row (the tree's own indent makes up the difference), never fewer than none. V22.1: maxDepth is the
+;          deepest tree level of the current macro (s.MaxDepth); the default 8 is the old fixed value.
 ; @tags macro, gui, columns, v22
-V22_Margin(depth, indentChars) {
-    n := Max(0, (8 - Max(0, depth)) * indentChars)
+V22_Margin(depth, indentChars, maxDepth := 8) {
+    n := Max(0, (maxDepth - Max(0, depth)) * indentChars)
     return n ? Format("{:" . n . "}", "") : ""
 }
 
@@ -14444,20 +14446,20 @@ V22_Sentence(node, lastNote := "") {
 ; @summary One whole step row in fixed columns: margin, number (with "►" in its last character when the task
 ;          moves to another program here, not on step 1), program, waits, marks, then the sentence.
 ; @tags macro, gui, columns, v22
-V22_Row(num, app, startsApp, wait, marks, sentence, depth, indentChars) {
+V22_Row(num, app, startsApp, wait, marks, sentence, depth, indentChars, maxDepth := 8) {
     cols := V22_Cols()
     numCol := V22_Pad(num, cols[1].W)
     if startsApp && num != 1
         numCol := SubStr(numCol, 1, cols[1].W - 1) . V22_MarkChars()["start"]
-    return V22_Margin(depth, indentChars) . numCol . " " . V22_Pad(app, cols[2].W) . " " . V22_Pad(wait, cols[3].W)
+    return V22_Margin(depth, indentChars, maxDepth) . numCol . " " . V22_Pad(app, cols[2].W) . " " . V22_Pad(wait, cols[3].W)
         . " " . V22_Pad(marks, cols[4].W) . " " . sentence
 }
 
 ; @summary The column names, built with the same margin and widths as a top-level row.
 ; @tags macro, gui, columns, v22
-V22_Header(indentChars) {
+V22_Header(indentChars, maxDepth := 8) {
     cols := V22_Cols()
-    return V22_Margin(0, indentChars) . V22_Pad("#", cols[1].W) . " " . V22_Pad("Program", cols[2].W) . " "
+    return V22_Margin(0, indentChars, maxDepth) . V22_Pad("#", cols[1].W) . " " . V22_Pad("Program", cols[2].W) . " "
         . V22_Pad("Waits", cols[3].W) . " " . V22_Pad("Marks", cols[4].W) . " What it does"
 }
 
@@ -14476,6 +14478,27 @@ V22_MarkChars(plain := "") {
     }
     return plain ? Map("scroll", "S", "vary", "V", "active", "A", "note", "N", "warn", "!", "start", ">")
         : Map("scroll", "↕", "vary", "⚡", "active", "◇", "note", "✎", "warn", "⚠", "start", "►")
+}
+
+; @summary V22.1: the deepest TREE level that will hold a row for this block list (0 = nothing nested). Counted the way
+;          VMB_AddBody adds rows: the rows of a list sit at its depth; a container's body is one level deeper; an IF adds an
+;          ELSE IF row per elif and one ELSE row at depth + 1 with their bodies at depth + 2; an empty list adds one
+;          "(empty ...)" placeholder row at its own depth. list = the macro's blocks, depth = the level of that list.
+; @tags macro, gui, columns, v22
+V22_MaxDepth(list, depth := 0) {
+    deepest := depth
+    for node in list {
+        if !(node is Map) || !VMF_IsContainer(node)
+            continue
+        VMF_Children(node)                              ; makes sure body / elifs / else are lists, like VMB_AddBody
+        deepest := Max(deepest, V22_MaxDepth(node["body"], depth + 1))
+        if node["type"] = "if" {
+            for elif in VMF_Elifs(node)
+                deepest := Max(deepest, depth + 1, V22_MaxDepth(elif["body"], depth + 2))
+            deepest := Max(deepest, depth + 1, V22_MaxDepth(node["else"], depth + 2))
+        }
+    }
+    return deepest
 }
 
 ; @summary How deep a tree item is: the number of tree levels above it (0 = top level). ELSE rows and "(empty)"
@@ -14539,7 +14562,7 @@ V22_PlaceHeader() {
     show := s.Columns && first && s.Macro["blocks"].Length
     if show {
         head.SetFont("s" . s.FontSize, "Consolas")
-        head.Text := V22_Header(s.IndentChars)
+        head.Text := V22_Header(s.IndentChars, s.MaxDepth)
         rc := Buffer(16, 0)
         NumPut("Ptr", first, rc)
         if SendMessage(0x1104, 1, rc.Ptr, s.TV) {                         ; TVM_GETITEMRECT, wParam 1 = text only
@@ -15607,6 +15630,22 @@ V4_SelfTest(path) {
         check("V22 row text", v22R0 . "|" . SubStr(v22R1, 22), Format("{:24}", "") . "1     notepad                          Click|12  ► notepad        2.4 s     ↕       Type")
         check("V22 header starts Program at the same place", InStr(V22_Header(3), "Program") . "|" . SubStr(V22_Header(3), 25),
             "31|#     Program        Waits     Marks   What it does")
+        v22Rm0 := V22_Row(1, "notepad", true, "", "", "Click", 0, 3, 0)
+        check("V22.1 maxDepth 0: a depth-0 row has no leading spaces", InStr(v22Rm0, "1") . "|" . InStr(V22_Header(3, 0), "#") . "|" . V22_Margin(0, 3, 0) . "|", "1|1||")
+        v22Rm1 := V22_Row(2, "notepad", true, "", "", "Click", 1, 3, 2), v22Rm2 := V22_Row(3, "calc", false, "", "", "Press", 2, 3, 2)
+        v22Rm0 := V22_Row(1, "notepad", true, "", "", "Click", 0, 3, 2)
+        check("V22.1 maxDepth 2: Program lines up at depth 0, 1 and 2, and so does the header",
+            (InStr(v22Rm0, "notepad") + 0) . "," . (InStr(v22Rm1, "notepad") + 3) . "," . (InStr(v22Rm2, "calc") + 6) . "," . InStr(V22_Header(3, 2), "Program"), "13,13,13,13")
+        check("V22.1 margin = (maxDepth - depth) * indent, never negative", StrLen(V22_Margin(0, 3, 2)) . "," . StrLen(V22_Margin(1, 3, 2)) . "," . StrLen(V22_Margin(2, 3, 2)) . "," . StrLen(V22_Margin(5, 3, 2)), "6,3,0,0")
+        v22Rep := Map("type", "repeat", "count", 2, "body", [Map("type", "click")])
+        v22If := Map("type", "if", "cond", "var", "name", "", "op", "=", "value", "", "body", [Map("type", "click")], "else", [])
+        v22IfE := Map("type", "if", "cond", "var", "name", "", "op", "=", "value", "", "body", [], "else", [Map("type", "click")],
+            "elifs", [Map("type", "elif", "cond", "var", "body", [Map("type", "repeat", "count", 1, "body", [Map("type", "click")])])])
+        check("V22.1 maxDepth: nothing nested / flat steps / empty macro", V22_MaxDepth([]) . V22_MaxDepth([Map("type", "click"), Map("type", "delay", "ms", 1)]), "00")
+        check("V22.1 maxDepth: a Repeat with a step / an empty Repeat", V22_MaxDepth([v22Rep]) . V22_MaxDepth([Map("type", "repeat", "count", 1, "body", [])]), "11")
+        check("V22.1 maxDepth: IF counts its ELSE row and the empty ELSE placeholder", V22_MaxDepth([v22If]), 2)
+        check("V22.1 maxDepth: ELSE IF body holding a Repeat is three levels", V22_MaxDepth([v22IfE]), 3)
+        check("V22.1 maxDepth: a Repeat inside a Repeat", V22_MaxDepth([Map("type", "repeat", "count", 1, "body", [v22Rep])]), 2)
         check("V22 rows deeper than 8 levels keep no margin", InStr(V22_Row(3, "x", false, "", "", "", 9, 3), "3"), 1)
         check("V22 sentence: no older form needed / older form / note and last run", V22_Sentence(Map("type", "delay", "ms", 500)) . "|"
             . V22_Sentence(Map("type", "input_keydelay", "delay", 30, "duration", 30)) . "|"
