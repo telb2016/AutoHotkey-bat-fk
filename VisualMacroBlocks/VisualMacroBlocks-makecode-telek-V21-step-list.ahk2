@@ -212,7 +212,7 @@ VMB() {
         ItemColor: Map(), PalColor: Map(), PalDesc: Map(), Undo: [], Redo: [], Clip: "", PlayFlat: [], HiItem: 0,
         FontSize: 9, Checked: Map(), AnchorNode: 0, CloseNotified: false, AutoSavePath: "", LastSavedAt: "",
         LastEditedStep: "", IdleHud: 0, QuickLookGui: 0, Insp: 0, InspShown: 1, ShowMeaning: 1,
-        Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0}
+        Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map()}
     return s
 }
 
@@ -707,14 +707,16 @@ VMB_NodeLabel(node) {
     s := VMB()
     off := (node.Get("breakpoint", 0) ? "●  " : "") . (node.Get("disabled", 0) ? "(off)  " : "")
     if VMF_IsStep(node) {
+        num := s.FlatIndex.Get(node, "?"), lastNote := s.LastNotes.Get(num, "")      ; V21: a note in the last run
+        mark := lastNote = "" ? "" : " ⚠", noteTag := lastNote = "" ? "" : V21_NoteTag(lastNote)
         line := s.ShowMeaning ? V20_StepLine(node) : ""        ; V20: one plain sentence per step
         if line != ""
-            return " " . off . "#" . s.FlatIndex.Get(node, "?") . "    " . line . " "
+            return " " . off . "#" . num . mark . "    " . line . noteTag . " "
         sum := VM_StepSummary(node)
         meaning := s.ShowMeaning ? V13_StepMeaning(node) : ""
-        return " " . off . "#" . s.FlatIndex.Get(node, "?") . "    " . sum[1] . (sum[3] != "" ? "   " . sum[3] : "")
+        return " " . off . "#" . num . mark . "    " . sum[1] . (sum[3] != "" ? "   " . sum[3] : "")
             . (meaning != "" ? "   → " . meaning : "")
-            . (sum[2] != "" ? "      [" . sum[2] . "]" : "") . (s.ShowMeaning ? V13_StepBadges(node) : "") . " "
+            . (sum[2] != "" ? "      [" . sum[2] . "]" : "") . (s.ShowMeaning ? V13_StepBadges(node) : "") . noteTag . " "
     }
     text := s.ShowMeaning ? V21_BlockLine(node) : VMF_BlockText(node)      ; V21: same plain style as the step lines
     t := node.Get("type", "")
@@ -2347,6 +2349,7 @@ VMB_Snapshot() {
     if s.Undo.Length > 60
         s.Undo.RemoveAt(1)
     s.Redo := []
+    s.LastNotes := Map()            ; V21: step numbers may shift, so the last run's notes no longer fit
     V7_ScheduleAutoSave()
 }
 
@@ -2615,6 +2618,7 @@ VMB_StopRecording() {
     tidy := V18_TidySteps(s.RecSteps)
     steps := V16_MergeWebSteps(s.RecSteps, webEvents), where := s.RecTarget
     s.RecSteps := 0
+    s.LastNotes := Map()                ; V21: forget the last run's notes
     markedStep := 0, autoNote := ""
     if steps.Length {
         VMB_Snapshot()
@@ -2768,6 +2772,7 @@ VMB_Play(onlySelected := false, startMode := "run", runTo := 0) {
     if wasVisible && s.Ctl["Hide"].Value
         s.Gui.Hide()
     wasDirty := s.Dirty
+    keptNotes := s.LastNotes        ; V21: VMB_Snapshot clears them; a run of only the selected steps leaves them as they were
     VMB_Snapshot()                  ; corrections made while it plays can be undone
     s.PlayFlat := VMF_Flatten(macro["blocks"])
     VMB_SetBusyUi(true)
@@ -2808,6 +2813,7 @@ VMB_Play(onlySelected := false, startMode := "run", runTo := 0) {
             note := "   Corrections were made - Save to keep them."
         }
     }
+    s.LastNotes := onlySelected ? keptNotes : V21_NoteSteps(result.HasOwnProp("Warnings") ? result.Warnings : [])
     played := VMF_Flatten(macro["blocks"])
     VMB_Refresh(result.Index && result.Index <= played.Length ? played[result.Index] : "")
     if wasVisible
@@ -3252,6 +3258,7 @@ VMB_SetMacro(macro, path) {
     s.ConvertedFrom := ""
     s.Dirty := false
     s.Undo := [], s.Redo := []
+    s.LastNotes := Map()            ; V21: a new or opened macro has no notes from a run
     s.Checked := Map()
     VMB_SettingsToControls()
     V7_LoadMemoryBar()
@@ -11561,6 +11568,7 @@ V13_InspCommit(*) {
         V13_InspHint("⚠ " . err.Message . "  (old value put back)", true)
         return
     }
+    hadNotes := s.LastNotes.Count       ; V21: VMB_Snapshot clears them, so the other rows' ⚠ must go too
     VMB_Snapshot()
     keys := Map()
     for k in work
@@ -11582,7 +11590,7 @@ V13_InspCommit(*) {
         names .= (names = "" ? "" : ", ") . c[3]
     if onChanged
         names .= (names = "" ? "" : ", ") . (onNow ? "turned on" : "turned off")
-    if onChanged || p.Info.Kind = "elif" {
+    if onChanged || p.Info.Kind = "elif" || hadNotes {
         VMB_Refresh()                    ; recolours / relabels everything inside
     } else {
         s.AppShow := V21_AppRuns(VMF_Flatten(s.Macro["blocks"]))     ; V21: keep the "in <program>" marks up to date
@@ -14225,6 +14233,25 @@ V21_BlockLine(node) {
     return line . (node.Get("note", "") = "" ? "" : "  // " . node["note"])
 }
 
+; @summary Which steps had a note in a run: result.Warnings (note texts, each "Step #<n> ...") -> Map step number ->
+;          the first note text for that step. Texts that do not start with "Step #<n>" are left out.
+; @tags macro, playback, gui, v21
+V21_NoteSteps(warnings) {
+    out := Map()
+    if !(warnings is Array)
+        return out
+    for text in warnings {
+        if RegExMatch(String(text), "^Step #(\d+)", &m) && !out.Has(Integer(m[1]))
+            out[Integer(m[1])] := String(text)
+    }
+    return out
+}
+
+; @summary The tag a step row gets when the step had a note in the last run: "   ⚠ last run: <note>", the note
+;          without its "Step #n: " start and at most 70 characters.
+; @tags macro, playback, gui, v21
+V21_NoteTag(text) => "   ⚠ last run: " . V20_Short(RegExReplace(String(text), "^Step #\d+:?\s*"), 70)
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -15126,6 +15153,15 @@ V4_SelfTest(path) {
         check("V21 run macro row", V21_BlockLine(Map("type", "call", "path", "C:\macros\orders.vmacro.json")), "Run the macro orders.vmacro.json")
         check("V21 note kept on block rows", V21_BlockLine(Map("type", "repeat", "count", 2, "body", [], "note", "twice")), "Repeat 2 times  (no steps inside yet)  // twice")
         check("V21 other blocks keep the older text", V21_BlockLine(Map("type", "ndc", "name", "ndc", "source", "")), VMF_BlockText(Map("type", "ndc", "name", "ndc", "source", "")))
+        v21Notes := V21_NoteSteps(["Step #7 (notepad.exe) stayed 900x600 instead of 950x712 (it has a size limit). Kept going.",
+            "Step #3: could not scroll the list back to where it was (Edit). Clicked anyway.", "Step #7: a second note",
+            "Playback was slow", "step #2 written in lower case", "Step #12: last one"])
+        check("V21 notes by step number", v21Notes.Count . "|" . v21Notes.Has(7) . v21Notes.Has(3) . v21Notes.Has(12) . v21Notes.Has(2)
+            . "|" . SubStr(v21Notes[7], 1, 23), "3|1110|Step #7 (notepad.exe) s")
+        check("V21 no notes", V21_NoteSteps([]).Count . V21_NoteSteps("").Count, "00")
+        check("V21 note tag drops the step number", V21_NoteTag("Step #3: could not scroll the list back.") . "|"
+            . V21_NoteTag("Step #7 (notepad.exe) stayed small."), "   ⚠ last run: could not scroll the list back.|   ⚠ last run: (notepad.exe) stayed small.")
+        check("V21 note tag shortened to 70", StrLen(V21_NoteTag("Step #1: " . StrReplace(Format("{:100}", ""), " ", "x"))), StrLen("   ⚠ last run: ") + 70)
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
