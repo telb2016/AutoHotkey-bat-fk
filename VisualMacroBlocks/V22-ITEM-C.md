@@ -302,9 +302,9 @@ V22_ToggleColumns(*) {
 
 ## 3. New self-test lines and PASS count
 
-Block 14 changes the existing Easy-layout check: the header is one more control there, so the count goes from 26
-to **27** ("V17 Easy layout shows 27 controls (V22: + the column header)") and `"ColHead"` is in its name list.
-Block 15 adds 1 check: in Easy layout the header moves up with the tree (its y is the tree's y minus 16).
+Block 14 adds `"ColHead"` to the name list of the existing Easy-layout check; block 15 changes its count from 26
+to **27** ("V17 Easy layout shows 27 controls (V22: + the column header)") and adds 1 check: in Easy layout the
+header moves up with the tree (its y is the tree's y minus 16).
 `V22_PlaceHeader` and `V22_ToggleColumns` need the real window, so they are tested there (below).
 Self-test under Wine: **369 PASS** (after item B: 368; V21: 347), `Failures: 0`.
 

@@ -453,7 +453,7 @@ VMB_BuildGui() {
     c["Search"].OnEvent("Change", (ctl, *) => VMB_FillPalette(ctl.Value))
     s.TV.OnEvent("DoubleClick", VMB_EditSelected)
     s.TV.OnEvent("ContextMenu", VMB_TreeMenu)
-    s.TV.OnEvent("ItemSelect", (*) => (VMB_SyncWinMatch(), V7_RefreshQuickLookIfOpen(), V13_InspLoad()))
+    s.TV.OnEvent("ItemSelect", (*) => (VMB_SyncWinMatch(), V7_RefreshQuickLookIfOpen(), V13_InspLoad(), V22_ShowDetail()))
     s.TV.OnEvent("ItemCheck", VMB_OnItemCheck)
     s.TV.OnEvent("Click", VMB_OnTreeClick)
     c["WinMatch"].OnEvent("Change", (ctl, *) => ctl.Value ? VMB_SetWinMatch(["", "program", "active"][ctl.Value]) : 0)
@@ -14554,6 +14554,65 @@ V22_ToggleColumns(*) {
     VMB_Refresh()
 }
 
+; @summary The whole story of one step in one line for the status bar, only the parts that apply, joined with " · ":
+;          "Step 6 · notepad · waits 3.2 s first · <sentence> · list is scrolled back first · ... · last run: <note>".
+;          num = the step number ("" leaves it out), app = its Program column, lastNote = its note in the last run.
+; @tags macro, gui, columns, v22
+V22_Detail(node, app, lastNote, num := "") {
+    parts := []
+    if num != ""
+        parts.Push("Step " . num)
+    if app != ""
+        parts.Push(app)
+    if node.Has("delayMs")
+        parts.Push("waits " . V20_Time(node["delayMs"]) . " first (set by hand)")
+    else if IsNumber(node.Get("gapMs", 0)) && node.Get("gapMs", 0) >= 300
+        parts.Push("waits " . V20_Time(node["gapMs"]) . " first")
+    text := V20_StepSentence(node)
+    if text = "" {
+        sum := VM_StepSummary(node)
+        text := Trim(sum[1] . "   " . sum[3])
+    }
+    parts.Push(text)
+    if node.Get("scroll", "") is Map
+        parts.Push("list is scrolled back first")
+    if (vary := V8_VarySummaryBadge(node)) != ""
+        parts.Push(RegExReplace(vary, "^⚡\[(.*)\]$", "$1"))
+    if node.Get("winMatch", "") = "active"
+        parts.Push("whatever window is active")
+    if node.Get("note", "") != ""
+        parts.Push("note: " . node["note"])
+    if lastNote != ""
+        parts.Push("last run: " . V20_Short(RegExReplace(String(lastNote), "^Step #\d+:?\s*"), 120))
+    out := ""
+    for part in parts
+        out .= (A_Index > 1 ? " · " : "") . part
+    return out
+}
+
+; @summary Tree ItemSelect (after what it already did): the status bar spells out the selected step with V22_Detail.
+;          Not while recording or playing (the status bar is in use then), not for blocks, and not again for the
+;          same step (the list re-selects it after every change, which would hide that change's own message).
+; @tags macro, gui, columns, v22
+V22_ShowDetail() {
+    static lastNode := 0
+    if VM_IsRecording() || VM_IsPlaying()
+        return
+    s := VMB()
+    info := VMB_SelectedInfo()
+    if !info || info.Kind != "node" || !VMF_IsStep(info.Node) {
+        lastNode := 0
+        return
+    }
+    node := info.Node
+    if node == lastNode
+        return
+    lastNode := node
+    num := s.FlatIndex.Get(node, "")
+    app := s.ColApp is Map && s.ColApp.Has(node) ? s.ColApp[node] : V22_AppOf(node, s.Macro["settings"])
+    VMB_Status(V22_Detail(node, app, s.LastNotes.Get(num, ""), num))
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -15532,6 +15591,14 @@ V4_SelfTest(path) {
         check("V22 marks come from the mark characters", V22_Marks(Map("type", "click", "note", "x"), "Step #1: y"), V22_MarkChars()["note"] . V22_MarkChars()["warn"])
         check("V22 no editor: the program stays in the sentence", V20_StepSentence(Map("type", "keys", "keys", "{Enter}", "win", Map("exe", "notepad.exe"))),
             "Press Enter (OK / submit / new line) in notepad")
+        check("V22 detail: plain step (no number, no program)", V22_Detail(Map("type", "delay", "ms", 500), "", ""), "Wait 500 ms")
+        check("V22 detail: number and program", V22_Detail(Map("type", "keys", "keys", "{Enter}"), "notepad", "", 4),
+            "Step 4 · notepad · Press Enter (OK / submit / new line)")
+        check("V22 detail: recorded pause", V22_Detail(Map("type", "keys", "keys", "{Enter}", "gapMs", 3200), "notepad", "", 6),
+            "Step 6 · notepad · waits 3.2 s first · Press Enter (OK / submit / new line)")
+        check("V22 detail: every part", V22_Detail(Map("type", "keys", "keys", "{Enter}", "delayMs", 400, "scroll", Map("v", 1), "varyDX", 5,
+            "winMatch", "active", "note", "check it"), "notepad", "Step #6: slow", 6),
+            "Step 6 · notepad · waits 400 ms first (set by hand) · Press Enter (OK / submit / new line) · list is scrolled back first · varies: +5px X / round · whatever window is active · note: check it · last run: slow")
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
