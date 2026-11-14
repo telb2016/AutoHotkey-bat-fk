@@ -1,4 +1,7 @@
-; VisualMacroBlocks-makecode-telek-V20
+; VisualMacroBlocks-makecode-telek-V21
+; V21 = V20 + a step list you can read at a glance: the program is named only where it changes, web / input /
+;       measuring steps and REPEAT / IF / FOR rows get plain sentences too, steps that had a note in the last run
+;       are marked ⚠, and in Steady playback a window whose saved spot is off every screen is put on the main screen.
 ; V20 = V19 + step lines you can read at a glance. Each step in the macro list is one plain sentence - what is
 ;       done, to what, in which program, whereabouts in the window - plus small tags for a long pause, a list that
 ;       is scrolled back first, or a note. Recording a click also remembers what was under the mouse (a button's
@@ -267,7 +270,7 @@ VMB_Main() {
 VMB_BuildGui() {
     s := VMB()
     s.Easy := Integer(IniRead(s.Ini, "V17", "EasyMode", 1)) ? 1 : 0
-    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V20")
+    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V21")
     g.SetFont("s9", "Segoe UI")
     c := s.Ctl, lbl := s.Lbl
     c["Record"] := g.AddButton("xm ym w105 h30", "&Record")
@@ -3302,7 +3305,7 @@ VMB_UpdateTitle() {
     if s.Path != ""
         SplitPath(s.Path, &name)
     savedTag := s.Dirty ? " *" : (s.LastSavedAt != "" ? " (saved " . s.LastSavedAt . ")" : "")
-    s.Gui.Title := "Visual Macro Blocks V20" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
+    s.Gui.Title := "Visual Macro Blocks V21" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
     V7_SyncIdleHud()
 }
 
@@ -14374,7 +14377,15 @@ V4_ExportPlayer(*) {
         MsgBox(err.Message, "V10 export failed", "Iconx")
 }
 V4_Help(*) {
-    MsgBox("NEW IN V20 (step lines you can read at a glance):"
+    MsgBox("NEW IN V21 (a step list you can read at a glance):"
+        . "`n• The program is named only where the task moves to another one:  Type `"5`" → in calc."
+        . "`n• Web, basic-input and measuring steps read as sentences too (Web: click `"submit`"), and so do REPEAT, FOR, IF,"
+        . "  SET and the other blocks (Repeat 5 times  (4 steps inside), If amount is 250)."
+        . "`n• After a run, the steps that had a note are marked ⚠ with the note at the end of the line, so you do not have to"
+        . "  open the log. The marks go away when you change the macro."
+        . "`n• Steady playback: if a window's saved spot is off every screen (another monitor layout), it is put on the main"
+        . "  screen instead, with a note."
+        . "`n`nNEW IN V20 (step lines you can read at a glance):"
         . "`n• Each step is one plain sentence: Click the `"OK`" button in notepad — bottom-right (410, 300). Tags show a long pause,"
         . "  a list that is scrolled back first, or your note. Untick 'Explain steps' in the Step settings panel for the old lines."
         . "`n• New recordings remember what was clicked: a button's caption, a menu item's text, or just 'a text box' / 'a list'."
