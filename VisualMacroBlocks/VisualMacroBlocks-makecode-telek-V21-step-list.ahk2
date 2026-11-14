@@ -12674,16 +12674,28 @@ V17_NormalizeWindow(node, hwnd, ctx) {
     wantW := Integer(node.Get("width", 693)), wantH := Integer(node.Get("height", 803))
     mx := Integer(node.Get("marginX", 20)), my := Integer(node.Get("marginY", 20))
     resizable := V17_IsResizable(WinGetStyle(id))
+    x := left + mx, y := top + my
+    if V18_Steady(ctx) {                ; V21: keep the window on a screen that exists (a different monitor layout)
+        rects := []
+        Loop MonitorGetCount() {
+            MonitorGet(A_Index, &monL, &monT, &monR, &monB)
+            rects.Push([monL, monT, monR, monB])
+        }
+        if !V21_OnAnyScreen(x + 8, y + 8, rects) {
+            V14_FitOnMonitor(&x, &y, wantW, wantH)
+            V17_Warn(ctx, "Step #" . ctx.Index . ": the saved window spot is off this screen; moved the window onto the main screen.")
+        }
+    }
     try {
         if resizable
-            WinMove(left + mx, top + my, wantW, wantH, id)
+            WinMove(x, y, wantW, wantH, id)
         else
-            WinMove(left + mx, top + my, , , id)
+            WinMove(x, y, , , id)
     }
     if resizable                        ; V19: wait until the window has its size, instead of a fixed 250 ms pause
         V19_WaitSize(id, wantW, wantH, ctx)
     else                                ; fixed-size window: only wait until it stops moving
-        V19_WaitSize(id, left + mx, top + my, ctx, , true)
+        V19_WaitSize(id, x, y, ctx, , true)
     ctx.Sleep(120)                      ; let the program re-draw its controls
     if !V4_Bool(node.Get("strictDpiCheck", 1))
         return
@@ -14252,6 +14264,16 @@ V21_NoteSteps(warnings) {
 ; @tags macro, playback, gui, v21
 V21_NoteTag(text) => "   ⚠ last run: " . V20_Short(RegExReplace(String(text), "^Step #\d+:?\s*"), 70)
 
+; @summary True when the point (x, y) lies on one of the screens. rects = array of [left, top, right, bottom]
+;          (as MonitorGet gives them; right and bottom are just outside the screen).
+; @tags macro, window, monitor, normalize, v21
+V21_OnAnyScreen(x, y, rects) {
+    for rect in rects
+        if x >= rect[1] && x < rect[3] && y >= rect[2] && y < rect[4]
+            return true
+    return false
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -15162,6 +15184,12 @@ V4_SelfTest(path) {
         check("V21 note tag drops the step number", V21_NoteTag("Step #3: could not scroll the list back.") . "|"
             . V21_NoteTag("Step #7 (notepad.exe) stayed small."), "   ⚠ last run: could not scroll the list back.|   ⚠ last run: (notepad.exe) stayed small.")
         check("V21 note tag shortened to 70", StrLen(V21_NoteTag("Step #1: " . StrReplace(Format("{:100}", ""), " ", "x"))), StrLen("   ⚠ last run: ") + 70)
+        v21Screens := [[0, 0, 1920, 1080], [-1280, 0, 0, 1024]]
+        check("V21 a spot on the main screen", V21_OnAnyScreen(8, 8, v21Screens), true)
+        check("V21 a spot on a second screen to the left", V21_OnAnyScreen(-500, 100, v21Screens), true)
+        check("V21 a spot off every screen", V21_OnAnyScreen(3008, 8, v21Screens) . V21_OnAnyScreen(100, 1100, v21Screens) . V21_OnAnyScreen(-1300, 8, v21Screens), "000")
+        check("V21 right and bottom edges are off the screen", V21_OnAnyScreen(1920, 5, [[0, 0, 1920, 1080]]) . V21_OnAnyScreen(5, 1080, [[0, 0, 1920, 1080]]), "00")
+        check("V21 no screens", V21_OnAnyScreen(8, 8, []), false)
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
