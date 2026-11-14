@@ -1,4 +1,7 @@
-; VisualMacroBlocks-makecode-telek-V21
+; VisualMacroBlocks-makecode-telek-V22
+; V22 = V21 + a step list in fixed columns: every row shows its program, and the columns #, Program, Waits, Marks
+;       and What it does line up, with a header line above the list naming them. A switch ("Columns" next to
+;       Explain steps, or right-click the list > Show columns) turns the columns off and gives the V21 list back.
 ; V21 = V20 + a step list you can read at a glance: the program is named only where it changes, web / input /
 ;       measuring steps and REPEAT / IF / FOR rows get plain sentences too, steps that had a note in the last run
 ;       are marked ⚠, and in Steady playback a window whose saved spot is off every screen is put on the main screen.
@@ -271,7 +274,7 @@ VMB_Main() {
 VMB_BuildGui() {
     s := VMB()
     s.Easy := Integer(IniRead(s.Ini, "V17", "EasyMode", 1)) ? 1 : 0
-    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V21")
+    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V22")
     g.SetFont("s9", "Segoe UI")
     c := s.Ctl, lbl := s.Lbl
     c["Record"] := g.AddButton("xm ym w105 h30", "&Record")
@@ -3325,7 +3328,7 @@ VMB_UpdateTitle() {
     if s.Path != ""
         SplitPath(s.Path, &name)
     savedTag := s.Dirty ? " *" : (s.LastSavedAt != "" ? " (saved " . s.LastSavedAt . ")" : "")
-    s.Gui.Title := "Visual Macro Blocks V21" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
+    s.Gui.Title := "Visual Macro Blocks V22" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
     V7_SyncIdleHud()
 }
 
