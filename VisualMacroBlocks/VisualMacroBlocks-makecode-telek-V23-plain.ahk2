@@ -1,6 +1,6 @@
 ; VisualMacroBlocks-makecode-telek-V23
 ; V23 = V22 + a plain step list: black text on white, no coloured bars (right-click the list > Coloured rows brings the
-;       old look back); the running step is yellow, switched-off steps are grey.
+;       old look back); the running step is yellow, switched-off steps are grey, steps with a note in the last run are red.
 ; V22 (below)
 ; V22.1 = answers round: see GROK-PLAN-V22-answers.md
 ; V22 = V21 + a step list in fixed columns: every row shows its program, and the columns #, Program, Waits, Marks
@@ -708,7 +708,7 @@ VMB_AddBody(list, parentId, owner, emptyText := "(empty - drag steps here)", off
             s.TV.Modify(id, "Check")
         s.ItemColor[id] := VMB_KindColor(node.Get("type", ""), nodeOff)
         s.ItemKind[id] := node.Get("type", "")                     ; V23: what the plain list needs to colour the row
-        s.ItemState[id] := nodeOff ? "off" : ""
+        s.ItemState[id] := nodeOff ? "off" : (!isBox && s.LastNotes.Get(s.FlatIndex.Get(node, "?"), "") != "" ? "note" : "")
         if isBox {
             VMB_AddBody(node["body"], id, node, , nodeOff, depth + 1)
             if node["type"] = "if" {
@@ -14700,13 +14700,23 @@ V22_ShowDetail() {
 ; ============================================================================
 
 ; @summary Colours for one row of the plain step list as [text, background] (COLORREF 0xBBGGRR), or 0 = system default
-;          (black on white). state "off" = switched-off step (grey on white). Everything else, control rows (repeat / if /
-;          else / for ...) included, stays default: black text, no fill.
+;          (black on white). state "off" = switched-off step (grey on white), "note" = a note in the last run
+;          (dark red on white). Control rows (repeat / if / else / for ...) are never red: they stay default.
 ; @tags macro, gui, colors, v23
 V23_RowColors(kind, state) {
     if state = "off"
         return [0x909090, 0xFFFFFF]
+    if state = "note" && !V23_IsBox(kind)
+        return [0x0000C0, 0xFFFFFF]
     return 0
+}
+
+; @summary True for the kinds of rows that hold other rows.
+; @tags macro, gui, v23
+V23_IsBox(kind) {
+    static boxes := Map("repeat", 1, "if", 1, "elif", 1, "else", 1, "for", 1, "until", 1, "while", 1, "untilvar", 1,
+        "dountil", 1, "foreach", 1, "ifvar", 1, "empty", 1)
+    return boxes.Has(kind)
 }
 
 ; @summary "Coloured rows" menu entry: switches the plain step list off / on (remembered) and redraws.
@@ -15743,6 +15753,9 @@ V4_SelfTest(path) {
         check("V23 plain list: control row is default", V23_RowColors("repeat", "") = 0 ? "default" : "coloured", "default")
         check("V23 plain list: switched-off step is grey on white", V23_RowColors("click", "off")[1] . "|" . V23_RowColors("click", "off")[2], 0x909090 . "|" . 0xFFFFFF)
         check("V23 plain list: switched-off control row is grey on white", V23_RowColors("if", "off")[1], 0x909090)
+        check("V23 note step is dark red on white", V23_RowColors("click", "note")[1] . "|" . V23_RowColors("click", "note")[2], 0x0000C0 . "|" . 0xFFFFFF)
+        check("V23 note on a control row stays default", V23_RowColors("repeat", "note") = 0 ? "default" : "coloured", "default")
+        check("V23 off wins over note", V23_RowColors("click", "off")[1], 0x909090)
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
