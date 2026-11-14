@@ -26,10 +26,11 @@ file is written for v2.0.19; Wine used 2.0.27).
 
 ## V21 checks Wine could not prove
 
-7. [ ] **Item A - program named only where it changes:** Record: click in Notepad, type a word, click in
-   Calculator, press a key, click back in Notepad, type, stop. Only the first Notepad row says `in notepad`, the
-   Calculator row says `→ in calc...` (the name comes from its exe, e.g. `CalculatorApp`), the next Notepad row says
-   `→ in notepad`, the rest name no program.
+7. [ ] **Item A - program named only where it changes:** Record: click in Notepad, type a word, click in a second
+   desktop program (for example Paint), press a key there, click back in Notepad, type, stop. Only the first Notepad
+   row says `in notepad`, the Paint row says `→ in mspaint`, the next Notepad row says `→ in notepad`, the rest name
+   no program. (Store apps such as the new Calculator may report a shared host program name instead of their own -
+   unsure, worth a look.)
 8. [ ] **Item B - web rows:** in a macro with web steps (recorded with the browser, or dragged in from the Web
    blocks), the rows read like `Web: click "submit"`, `Web: type "..." into email`, `Web: go to example.com/orders`.
    A Fill step with "Ask for this text each time" must NOT show its text.
