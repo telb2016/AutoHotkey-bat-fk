@@ -370,6 +370,7 @@ VMB_BuildGui() {
     s.ShowMeaning := Integer(IniRead(s.Ini, "V13", "ExplainSteps", 1))
     s.Columns := Integer(IniRead(s.Ini, "V22", "Columns", 1)) ? 1 : 0          ; V22: step list in fixed columns
     s.PlainList := Integer(IniRead(s.Ini, "V23", "PlainList", 1)) ? 1 : 0      ; V23: plain black-on-white step list
+    s.Preflight := Integer(IniRead(s.Ini, "V24", "Preflight", 1)) ? 1 : 0      ; V24: "Ready to play?" check before a run
     c["InspToggle"] := g.AddButton("x+6 w120 h24", s.InspShown ? "Settings panel ◂" : "Settings panel ▸")
     c["InspToggle"].OnEvent("Click", V13_ToggleInspector)
     c["Search"] := g.AddEdit("xm y+6 w230")
@@ -2372,6 +2373,9 @@ VMB_TreeMenu(ctl, item, isRightClick, x, y) {
     m.Add("Coloured rows", V23_ToggleColoured)      ; V23: the old coloured step list on / off
     if !VMB().PlainList
         m.Check("Coloured rows")
+    m.Add("Check before playing", V24_ToggleCheck)      ; V24: the "Ready to play?" box on / off
+    if VMB().Preflight
+        m.Check("Check before playing")
     m.Add()
     m.Add("Move up`tCtrl+Up", (*) => VMB_MoveSelected(-1))
     m.Add("Move down`tCtrl+Down", (*) => VMB_MoveSelected(1))
@@ -2806,6 +2810,11 @@ VMB_Play(onlySelected := false, startMode := "run", runTo := 0) {
         name := s.Macro.Get("name", "") != "" ? s.Macro["name"] : "macro"
         opts.ResultsPath := s.Dir . "\results\" . RegExReplace(name, "[\\/:*?`"<>|]", "_") . "-"
             . FormatTime(, "yyyyMMdd-HHmmss") . ".csv"
+    }
+    if !onlySelected && startMode = "run" && s.Preflight && settings.Get("steady", 0) {      ; V24: the whole macro, editor only
+        V18_WaitModsUp()                ; the box must not see Ctrl+Shift+P still held down
+        if !V24_ReadyToPlay(macro, settings)
+            return
     }
     d := V5_Dbg()
     d.Arrows := IniRead(s.Ini, "Blocks", "StepArrows", 1) ? true : false
@@ -14777,6 +14786,45 @@ V24_Preflight(steps, settings, openExes, screenText) {
     if was != "" && screenText != "" && was != screenText
         out.Push("The screen is " . screenText . ", recorded on " . was . " - clicks may land differently.")
     return out
+}
+
+; @summary Map of lower-case exe names of the windows that are open right now (each window asked inside a try).
+; @tags macro, playback, preflight, v24
+V24_OpenExes() {
+    open := Map()
+    try list := WinGetList()
+    catch
+        return open
+    for hwnd in list {
+        try open[StrLower(WinGetProcessName("ahk_id " . hwnd))] := 1
+    }
+    return open
+}
+
+; @summary Runs the Ready-to-play check for the whole macro. No problems = true at once. Otherwise ONE box (title
+;          "Ready to play?", the problems as bullets): Yes = true (play anyway), No = false and the first problem goes to
+;          the status bar. Editor only: exported players never come through here.
+; @tags macro, playback, preflight, v24
+V24_ReadyToPlay(macro, settings) {
+    problems := V24_Preflight(VMF_Flatten(macro["blocks"]), settings, V24_OpenExes(), V18_ScreenText())
+    if !problems.Length
+        return true
+    text := ""
+    for line in problems
+        text .= "• " . line . "`n"
+    text .= "`nYes = play anyway, No = stop so I can fix it."
+    if MsgBox(text, "Ready to play?", "YesNo Icon!") = "Yes"
+        return true
+    VMB_Status(problems[1])
+    return false
+}
+
+; @summary "Check before playing" menu entry: the Ready-to-play box on / off (remembered).
+; @tags macro, gui, preflight, v24
+V24_ToggleCheck(*) {
+    s := VMB()
+    s.Preflight := s.Preflight ? 0 : 1
+    IniWrite(s.Preflight, s.Ini, "V24", "Preflight")
 }
 
 ; ============================================================================
