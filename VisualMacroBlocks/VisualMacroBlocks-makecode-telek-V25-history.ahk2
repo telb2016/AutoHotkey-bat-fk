@@ -2380,6 +2380,7 @@ VMB_TreeMenu(ctl, item, isRightClick, x, y) {
     m.Add("Check before playing", V24_ToggleCheck)      ; V24: the "Ready to play?" box on / off
     if VMB().Preflight
         m.Check("Check before playing")
+    m.Add("Run history...", V25_ShowHistory)        ; V25: the last runs of this macro, and whether they repeat the same way
     m.Add()
     m.Add("Move up`tCtrl+Up", (*) => VMB_MoveSelected(-1))
     m.Add("Move down`tCtrl+Down", (*) => VMB_MoveSelected(1))
@@ -14979,6 +14980,93 @@ V25_RecordRun(macroPath, result, seconds, steps, noteSteps) {
     }
 }
 
+; @summary One line about the newest runs (at most the last 10, runs = oldest first): how many finished / stopped / failed
+;          (and at which steps), the usual time (median seconds of the finished runs) and the step with the most notes.
+;          Parts that do not apply are left out.
+; @tags macro, playback, history, v25
+V25_Summary(runs) {
+    if !(runs is Array) || !runs.Length
+        return "No runs yet."
+    first := Max(1, runs.Length - 9)
+    n := runs.Length - first + 1
+    fin := 0, stopped := 0, failed := 0, failSteps := [], secs := [], noteRuns := Map()
+    loop n {
+        r := runs[first + A_Index - 1]
+        if r["Result"] = "Finished" {
+            fin += 1
+            secs.Push(r["Seconds"])
+        } else if SubStr(r["Result"], 1, 6) = "Failed" {
+            failed += 1
+            if r["FailStep"] {
+                known := false
+                for st in failSteps
+                    known := known || st = r["FailStep"]
+                if !known
+                    failSteps.Push(r["FailStep"])
+            }
+        } else
+            stopped += 1
+        seen := Map()
+        for st in r["NoteSteps"] {
+            if !seen.Has(st) {
+                seen[st] := 1
+                noteRuns[st] := noteRuns.Get(st, 0) + 1
+            }
+        }
+    }
+    parts := []
+    if fin
+        parts.Push(fin . " finished")
+    if stopped
+        parts.Push(stopped . " stopped")
+    if failed {
+        failSteps := V25_SortNums(failSteps)
+        parts.Push(failed . " failed" . (failSteps.Length ? " (step" . (failSteps.Length > 1 ? "s " : " ") . V4_Join(failSteps, ", ") . ")" : ""))
+    }
+    text := (n = 1 ? "Last run: " : "Last " . n . " runs: ") . V4_Join(parts, ", ") . "."
+    if secs.Length {
+        secs := V25_SortNums(secs)
+        mid := secs.Length // 2
+        median := Mod(secs.Length, 2) ? secs[mid + 1] : (secs[mid] + secs[mid + 1]) / 2
+        text .= " Usually " . Round(median) . " s."
+    }
+    bestStep := 0, bestCount := 0
+    for st, c in noteRuns {                     ; a Map walks its keys smallest first, so a tie keeps the lower step
+        if c > bestCount
+            bestStep := st, bestCount := c
+    }
+    if bestCount
+        text .= " Step " . bestStep . " had notes in " . bestCount . (bestCount = 1 ? " run." : " runs.")
+    return text
+}
+
+; @summary "Run history..." menu entry: a small window with the summary line on top and the runs below, newest first.
+; @tags macro, gui, history, v25
+V25_ShowHistory(*) {
+    static hist := 0
+    s := VMB()
+    if s.Path = ""
+        return VMB_Status("Save the macro first - its run history is kept next to the macro file.")
+    runs := V25_ReadRuns(s.Path)
+    if IsObject(hist)
+        try hist.Destroy()
+    hist := Gui("+Owner" . s.Gui.Hwnd, "Run history")
+    hist.AddText("w600", V25_Summary(runs))
+    lv := hist.AddListView("w600 r12", ["When", "Result", "Time", "Notes"])
+    i := runs.Length
+    while i >= 1 {
+        r := runs[i]
+        lv.Add("", r["When"], r["Result"], Format("{:.1f} s", r["Seconds"]),
+            r["Notes"] ? r["Notes"] . " (step" . (r["NoteSteps"].Length > 1 ? "s " : " ") . V4_Join(r["NoteSteps"], ", ") . ")" : "")
+        i -= 1
+    }
+    lv.ModifyCol(1, 130), lv.ModifyCol(2, 150), lv.ModifyCol(3, 80), lv.ModifyCol(4, 215)
+    close := (*) => hist.Destroy()
+    hist.AddButton("Default w80", "Close").OnEvent("Click", close)
+    hist.OnEvent("Close", close), hist.OnEvent("Escape", close)
+    hist.Show()
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -16070,6 +16158,26 @@ V4_SelfTest(path) {
         check("V25 record: two runs written and read back", v25F.Length . "|" . v25F[1]["Result"] . "|" . v25F[2]["Result"] . "|" . v25F[1]["NoteSteps"][1], "2|Finished|Failed at step 2|2")
         check("V25 record: unsaved macro writes nothing", FileExist(v25Dir . "\.runs.csv") ? 1 : 0, 0)
         check("V25 record: no file reads as no runs", V25_ReadRuns(v25Dir . "\nothing.json").Length, 0)
+        v25R := (w, res, secs, notes := [], fail := 0) => Map("When", w, "Result", res, "Seconds", secs, "Steps", 10, "Notes", notes.Length, "NoteSteps", notes, "FailStep", fail)
+        check("V25 summary: no runs", V25_Summary([]) . "|" . V25_Summary(0), "No runs yet.|No runs yet.")
+        v25Fin := []
+        loop 3
+            v25Fin.Push(v25R("w", "Finished", 40 + A_Index))
+        check("V25 summary: all finished", V25_Summary(v25Fin), "Last 3 runs: 3 finished. Usually 42 s.")
+        check("V25 summary: one run", V25_Summary([v25R("w", "Finished", 12.4)]), "Last run: 1 finished. Usually 12 s.")
+        v25Mix := []
+        loop 8
+            v25Mix.Push(v25R("w", "Finished", 41, A_Index <= 4 ? [6] : []))
+        v25Mix.Push(v25R("w", "Failed at step 6", 9, [], 6))
+        v25Mix.Push(v25R("w", "Stopped", 3))
+        check("V25 summary: mixed", V25_Summary(v25Mix), "Last 10 runs: 8 finished, 1 stopped, 1 failed (step 6). Usually 41 s. Step 6 had notes in 4 runs.")
+        v25Few := [v25R("w", "Finished", 30, [3, 9]), v25R("w", "Finished", 50, [9]), v25R("w", "Failed at step 2", 5, [], 2), v25R("w", "Failed at step 9", 5, [], 9)]
+        check("V25 summary: most-noted step, two failed steps, median of two", V25_Summary(v25Few), "Last 4 runs: 2 finished, 2 failed (steps 2, 9). Usually 40 s. Step 9 had notes in 2 runs.")
+        v25Old := []
+        loop 12
+            v25Old.Push(v25R("w", A_Index <= 2 ? "Failed at step 1" : "Finished", 10, [], A_Index <= 2 ? 1 : 0))
+        check("V25 summary: only the last 10 runs count", V25_Summary(v25Old), "Last 10 runs: 10 finished. Usually 10 s.")
+        check("V25 summary: all stopped, one note", V25_Summary([v25R("w", "Stopped", 1, [4])]), "Last run: 1 stopped. Step 4 had notes in 1 run.")
         DirDelete(v25Dir, true)
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
