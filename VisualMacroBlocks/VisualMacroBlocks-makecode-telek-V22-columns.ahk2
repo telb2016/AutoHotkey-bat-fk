@@ -12547,7 +12547,7 @@ V17_EasyHelp(*) {
         . "  ◇ uses whatever window is active, ✎ has your note, ⚠ had a note in the last run."
         . "`n• Right-click the list -> Show columns (or the Columns tick box in the Step settings panel) for the V21 lines."
         . "`n`nNeed CSV rows, web pages, pictures or anything else? Click 'More features ▸' (Ctrl+Shift+E)."
-        . "`nEmergency exit: Ctrl+Shift+X.", "Visual Macro Blocks V18 - Easy mode", "Iconi")
+        . "`nEmergency exit: Ctrl+Shift+X." . V22_ColumnCheckLine(VMB().IndentSeen), "Visual Macro Blocks V18 - Easy mode", "Iconi")
 }
 
 ; @summary Waits for one left-click on another program's window and returns its top-level HWND
@@ -14551,6 +14551,13 @@ V22_ApplyTreeFont(refresh := true) {
         VMB_Refresh()
 }
 
+; @summary V22.1: the last line of the two help texts, "`nColumn check: " + the indent values the list measured
+;          (s.IndentSeen); "" when that is not a non-empty string (columns never switched on yet).
+; @tags macro, gui, columns, v22
+V22_ColumnCheckLine(seen) {
+    return seen is String && seen != "" ? "`nColumn check: " . seen : ""
+}
+
 ; @summary V22.1: height of the header line in the window's 96-dpi units: the tree font's text height in pixels
 ;          (s.CharH) + 2, converted from screen pixels; 16 when the height is not known (charH < 1).
 ; @tags macro, gui, columns, v22
@@ -14833,7 +14840,7 @@ V4_Help(*) {
         . "`n   6. Press Ctrl+Shift+D (or click '🧭 Lab...') to open the live Deterministic Inspector & Layout Physics Lab!"
         . "`n`nV8 FEATURES (Smart Vary & 1-Click Auto-Loop):"
         . "`n• Hold Alt while clicking during recording (or press F7 / Ctrl+L) to turn any step into a loop with pixel stride, multi-spot,"
-        . "  dynamic key repetition, or counter/column variables.",
+        . "  dynamic key repetition, or counter/column variables." . V22_ColumnCheckLine(VMB().IndentSeen),
         "Visual Macro Blocks V18 - help", "Iconi")
 }
 
@@ -15664,6 +15671,8 @@ V4_SelfTest(path) {
         check("V22.1 maxDepth: ELSE IF body holding a Repeat is three levels", V22_MaxDepth([v22IfE]), 3)
         check("V22.1 maxDepth: a Repeat inside a Repeat", V22_MaxDepth([Map("type", "repeat", "count", 1, "body", [v22Rep])]), 2)
         check("V22.1 header height = text height + 2 (96 dpi / 144 dpi / unknown)", V22_HeaderHeight(16, 96) . "," . V22_HeaderHeight(30, 96) . "," . V22_HeaderHeight(20, 144) . "," . V22_HeaderHeight(0, 96), "18,32,15,16")
+        check("V22.1 column check line: text / empty / not a string", V22_ColumnCheckLine("char 7 px, asked 21 px, got 21 px, 3 characters") . "|" . V22_ColumnCheckLine("") . "|" . V22_ColumnCheckLine(0) . "|",
+            "`nColumn check: char 7 px, asked 21 px, got 21 px, 3 characters|||")
         check("V22 rows deeper than 8 levels keep no margin", InStr(V22_Row(3, "x", false, "", "", "", 9, 3), "3"), 1)
         check("V22 sentence: no older form needed / older form / note and last run", V22_Sentence(Map("type", "delay", "ms", 500)) . "|"
             . V22_Sentence(Map("type", "input_keydelay", "delay", 30, "duration", 30)) . "|"

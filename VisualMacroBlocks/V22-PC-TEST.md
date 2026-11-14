@@ -7,7 +7,7 @@ at 96 dpi). Tick each one off.
 ## 0. Self-test first
 
 `AutoHotkey64.exe VisualMacroBlocks-makecode-telek-V22-columns.ahk2 --self-test C:\temp\report.txt`
-must end with `Failures: 0` and have **373** PASS lines (V21 had 347). Use the AutoHotkey version on the PC (the
+must end with `Failures: 0` and have **388** PASS lines (V22 had 373, V21 had 347). Use the AutoHotkey version on the PC (the
 file is written for v2.0.19; Wine used 2.0.27).
 
 ## From the plan, section 8
@@ -22,6 +22,7 @@ file is written for v2.0.19; Wine used 2.0.27).
    how many characters (and by how much per level, if you nest a block inside a block). This is the one thing Wine
    could not prove: Windows may refuse the small tree indent the columns ask for; the program then widens it by
    whole characters itself, so the rows should still line up.
+   If the rows inside a block are out of line, press ? and read me the 'Column check' line.
 4. [ ] **Zoom:** make the list bigger and smaller (A+ / A-, or Ctrl + / Ctrl - in the list). Columns and header still
    line up. The header text may start a hair (about 2 px) left of the row text - that is expected; tell if it is
    off by a whole character or more, or if the header letters are cut off at the bottom at a big size.
