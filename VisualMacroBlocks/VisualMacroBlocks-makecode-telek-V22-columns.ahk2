@@ -366,7 +366,8 @@ VMB_BuildGui() {
     DllCall("SendMessage", "Ptr", c["Search"].Hwnd, "UInt", 0x1501, "Ptr", 1, "WStr", "Search blocks...")  ; EM_SETCUEBANNER
     c["Search"].GetPos(&sx, &sy)
     s.Pal := g.AddTreeView("xm y+4 w230 h372")
-    s.TV := g.AddTreeView("x" . (sx + 240) . " y" . sy . " w940 h400 Checked")
+    c["ColHead"] := g.AddText("x" . (sx + 240) . " y" . sy . " w940 h16 c606060", "")     ; V22: column names above the tree
+    s.TV := g.AddTreeView("x" . (sx + 240) . " y" . (sy + 16) . " w940 h384 Checked")
     s.FontSize := Integer(IniRead(s.Ini, "Blocks", "FontSize", 9))
     V22_ApplyTreeFont(false)            ; V22: Consolas + exact indent in column mode
     V13_BuildInspector(g)
@@ -626,6 +627,7 @@ VMB_OnSize(g, minMax, w, h) {
         ctl.GetPos(&cx)
         ctl.Move(cx, bottomY)
     }
+    V22_PlaceHeader()
 }
 
 ; @summary Short usage tips.
@@ -665,6 +667,7 @@ VMB_Refresh(selectNode := "") {
     VMB_UpdateTitle()
     V13_InspLoad()
     V17_UpdateWinInfo()
+    V22_PlaceHeader()
 }
 
 VMB_AddBody(list, parentId, owner, emptyText := "(empty - drag steps here)", off := false, depth := 0) {
@@ -2338,6 +2341,9 @@ VMB_TreeMenu(ctl, item, isRightClick, x, y) {
     m.Add("Tick all`tCtrl+A", VMB_CheckAll)
     m.Add("Untick all", VMB_UncheckAll)
     m.Add("Step grid (edit Window / Find by / Wait for many steps)...", VMB_StepGrid)
+    m.Add("Show columns", V22_ToggleColumns)        ; V22: step list in fixed columns on / off
+    if VMB().Columns
+        m.Check("Show columns")
     m.Add()
     m.Add("Move up`tCtrl+Up", (*) => VMB_MoveSelected(-1))
     m.Add("Move down`tCtrl+Down", (*) => VMB_MoveSelected(1))
@@ -2552,6 +2558,7 @@ VMB_Zoom(delta) {
     s := VMB()
     s.FontSize := delta = 0 ? 9 : VF_Clamp(s.FontSize + delta, 7, 20)
     V22_ApplyTreeFont()                 ; V22: Consolas + exact indent in column mode
+    V22_PlaceHeader()
     IniWrite(s.FontSize, s.Ini, "Blocks", "FontSize")
     VMB_Status("Tree text size " . s.FontSize . ".")
 }
@@ -11392,6 +11399,9 @@ V13_BuildInspector(g) {
     p.BtnLook := g.AddButton("x0 y0 w10 h26 Hidden", "Quick Look")
     p.Explain := g.AddCheckbox("x0 y0 w10 h20 Hidden", "Explain steps in the tree (meaning, wait, window, note)")
     p.Explain.Value := s.ShowMeaning
+    p.Columns := g.AddCheckbox("x0 y0 w10 h20 Hidden", "Columns")         ; V22: step list in fixed columns
+    p.Columns.Value := s.Columns
+    p.Columns.OnEvent("Click", V22_ToggleColumns)
     p.On.OnEvent("Click", V13_InspCommit)
     p.BtnAll.OnEvent("Click", VMB_EditSelected)
     p.BtnTest.OnEvent("Click", VMB_TestSelected)
@@ -11428,7 +11438,8 @@ V13_InspLayout(x, y, w, h) {
     p.BtnAll.Move(ix, footTop + 38, 106, 26)
     p.BtnTest.Move(ix + 112, footTop + 38, 90, 26)
     p.BtnLook.Move(ix + 208, footTop + 38, 90, 26)
-    p.Explain.Move(ix, footTop + 68, iw, 20)
+    p.Explain.Move(ix, footTop + 68, iw - 84, 20)
+    p.Columns.Move(ix + iw - 80, footTop + 68, 80, 20)
     V13_InspArrange()
 }
 
@@ -11439,7 +11450,7 @@ V13_InspArrange() {
     if !p || !p.HasGeo
         return
     show := s.InspShown
-    for ctl in [p.Box, p.Title, p.Meaning, p.Hint, p.BtnAll, p.BtnTest, p.BtnLook, p.Explain]
+    for ctl in [p.Box, p.Title, p.Meaning, p.Hint, p.BtnAll, p.BtnTest, p.BtnLook, p.Explain, p.Columns]
         ctl.Visible := show
     p.On.Visible := show && p.Node && p.Info && p.Info.Kind = "node"
     p.Empty.Visible := show && !p.Fields.Length
@@ -12424,7 +12435,7 @@ V17_EasyLayout(full) {
         x := place(name, x, y2) + 6
     place("WinInfo", x + 14, y2 + 5, 760, 20)
     dy := full["lbl:HdrBlocks"][2] - (y2 + full["New"][4] + 14)
-    for name in ["lbl:HdrBlocks", "lbl:HdrMacro", "Undo", "Redo", "Search", "Pal", "TV"] {
+    for name in ["lbl:HdrBlocks", "lbl:HdrMacro", "Undo", "Redo", "Search", "Pal", "TV", "ColHead"] {
         q := full[name]
         out[name] := [q[1], q[2] - dy, q[3], q[4]]
     }
@@ -12523,6 +12534,13 @@ V17_EasyHelp(*) {
         . "`nLists and pages are scrolled back to where they were when you recorded, before each click (standard"
         . "`nWindows lists and boxes only - not web pages, Citrix or Remote Desktop). For those, start each run from the"
         . "`nsame screen and scroll with the keyboard (Ctrl+Home, PgDn) while recording: key presses replay the same way every time."
+        . "`n`nNEW IN V22 - THE STEP LIST IN COLUMNS"
+        . "`n• Every step row has fixed columns:  #   Program   Waits   Marks   What it does. The Program column is filled on"
+        . "  every row (a Wait step shows the program of the step before it)."
+        . "`n• Waits = the pause before the step. A * after the time (500 ms*) = a wait you set by hand."
+        . "`n• Marks: ► the task moves to another program here, ↕ the list is scrolled back first, ⚡ changes each round,"
+        . "  ◇ uses whatever window is active, ✎ has your note, ⚠ had a note in the last run."
+        . "`n• Right-click the list -> Show columns (or the Columns tick box in the Step settings panel) for the V21 lines."
         . "`n`nNeed CSV rows, web pages, pictures or anything else? Click 'More features ▸' (Ctrl+Shift+E)."
         . "`nEmergency exit: Ctrl+Shift+X.", "Visual Macro Blocks V18 - Easy mode", "Iconi")
 }
@@ -14467,7 +14485,9 @@ V22_ApplyTreeFont(refresh := true) {
         return
     if !defaultIndent
         defaultIndent := SendMessage(0x1106, 0, 0, s.TV)                  ; TVM_GETINDENT, before any change
-    s.TV.SetFont("s" . s.FontSize, s.Columns ? "Consolas" : "Segoe UI")
+    s.TV.SetFont("s" . s.FontSize, s.Columns ? "Consolas" : "MS Shell Dlg 2")     ; a font name that is missing keeps
+    if !s.Columns                                                                  ; the old font, so Segoe UI comes second
+        s.TV.SetFont(, "Segoe UI")
     if !s.Columns {
         SendMessage(0x1107, defaultIndent, 0, s.TV)                        ; TVM_SETINDENT
         return
@@ -14491,6 +14511,47 @@ V22_ApplyTreeFont(refresh := true) {
     s.IndentSeen := "char " . charW . " px, asked " . want . " px, got " . actual . " px, " . s.IndentChars . " characters"
     if refresh && s.IndentChars != before
         VMB_Refresh()
+}
+
+; @summary Puts the column-name line right above the macro tree, its left edge where the first row's text starts
+;          (TVM_GETITEMRECT, text part), in the tree's font and size. Hidden when the macro is empty or columns are off.
+; @tags macro, gui, columns, v22
+V22_PlaceHeader() {
+    s := VMB()
+    if !s.TV || !s.Gui || !s.Ctl.Has("ColHead") || !(s.Macro is Map)
+        return
+    head := s.Ctl["ColHead"]
+    first := s.TV.GetNext()
+    show := s.Columns && first && s.Macro["blocks"].Length
+    if show {
+        head.SetFont("s" . s.FontSize, "Consolas")
+        head.Text := V22_Header(s.IndentChars)
+        rc := Buffer(16, 0)
+        NumPut("Ptr", first, rc)
+        if SendMessage(0x1104, 1, rc.Ptr, s.TV) {                         ; TVM_GETITEMRECT, wParam 1 = text only
+            pt := Buffer(8, 0)
+            NumPut("Int", NumGet(rc, 0, "Int"), "Int", 0, pt)
+            DllCall("MapWindowPoints", "Ptr", s.TV.Hwnd, "Ptr", s.Gui.Hwnd, "Ptr", pt, "UInt", 1)     ; tree -> window
+            s.TV.GetPos(&tx, &ty, &tw)
+            hx := Round(NumGet(pt, 0, "Int") * 96 / A_ScreenDPI)           ; the window's controls use 96-dpi units
+            head.Move(hx, ty - 16, Max(50, tx + tw - hx), 16)
+        }
+    }
+    head.Visible := show
+}
+
+; @summary "Columns" tick box / "Show columns" menu entry: step list in fixed columns on or off (remembered).
+; @tags macro, gui, columns, v22
+V22_ToggleColumns(*) {
+    s := VMB()
+    if VM_IsRecording() || VM_IsPlaying()
+        return
+    s.Columns := s.Columns ? 0 : 1
+    IniWrite(s.Columns, s.Ini, "V22", "Columns")
+    if s.Insp && s.Insp.HasOwnProp("Columns")
+        s.Insp.Columns.Value := s.Columns
+    V22_ApplyTreeFont(false)
+    VMB_Refresh()
 }
 
 ; ============================================================================
@@ -14593,7 +14654,14 @@ V4_ExportPlayer(*) {
         MsgBox(err.Message, "V10 export failed", "Iconx")
 }
 V4_Help(*) {
-    MsgBox("NEW IN V21 (a step list you can read at a glance):"
+    MsgBox("NEW IN V22 (step list in columns):"
+        . "`n• Every step row has fixed columns:  #   Program   Waits   Marks   What it does. The Program column is filled on"
+        . "  every row (a Wait step shows the program of the step before it)."
+        . "`n• Waits = the pause before the step. A * after the time (500 ms*) = a wait you set by hand."
+        . "`n• Marks: ► the task moves to another program here, ↕ the list is scrolled back first, ⚡ changes each round,"
+        . "  ◇ uses whatever window is active, ✎ has your note, ⚠ had a note in the last run."
+        . "`n• Right-click the list -> Show columns (or the Columns tick box in the Step settings panel) for the V21 lines."
+        . "`n`nNEW IN V21 (a step list you can read at a glance):"
         . "`n• The program is named only where the task moves to another one:  Type `"5`" → in calc."
         . "`n• Web, basic-input and measuring steps read as sentences too (Web: click `"submit`"), and so do REPEAT, FOR, IF,"
         . "  SET and the other blocks (Repeat 5 times  (4 steps inside), If amount is 250)."
@@ -14978,12 +15046,13 @@ V4_SelfTest(path) {
         check("V17 Easy click popup hides the coordinates", V17_EasyFieldsFor("click").Has("scrX"), false)
         v17Full := Map()
         for v17N in ["Record", "Stop", "Play", "Step", "PickWin", "EasyToggle", "Help", "New", "Open", "Recent", "Save", "SaveAs",
-            "WinInfo", "lbl:HdrBlocks", "lbl:HdrMacro", "Undo", "Redo", "Search", "Pal", "TV", "Edit", "Delete", "Up", "Down", "In", "Out"]
+            "WinInfo", "lbl:HdrBlocks", "lbl:HdrMacro", "Undo", "Redo", "Search", "Pal", "TV", "ColHead", "Edit", "Delete", "Up", "Down", "In", "Out"]
             v17Full[v17N] := [100, 500, 50, 24]
         v17Full["Record"] := [10, 10, 105, 30], v17Full["Stop"] := [121, 10, 65, 30]
         v17Full["New"] := [10, 50, 56, 26], v17Full["lbl:HdrBlocks"] := [10, 200, 200, 20], v17Full["TV"] := [250, 230, 940, 400]
         v17L := V17_EasyLayout(v17Full)
-        check("V17 Easy layout shows 26 controls", v17L.Count, 26)
+        check("V17 Easy layout shows 27 controls (V22: + the column header)", v17L.Count, 27)
+        check("V22 Easy layout moves the column header up with the tree", v17L["ColHead"][2], 500 - (200 - (50 + 26 + 14)))
         check("V17 Easy row 1: Stop right after Record", v17L["Stop"][1] . "," . v17L["Stop"][2], "121,10")
         check("V17 Easy row 1: Pick window on the top row", v17L["PickWin"][2] . "," . v17L["PickWin"][4], "10,30")
         check("V17 Easy layout moves the macro up under row 2", v17L["lbl:HdrBlocks"][2] . "," . v17L["TV"][2], "90,120")
