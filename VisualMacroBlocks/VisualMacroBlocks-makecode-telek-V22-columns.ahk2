@@ -1,4 +1,5 @@
 ; VisualMacroBlocks-makecode-telek-V22
+; V22.1 = answers round: see GROK-PLAN-V22-answers.md
 ; V22 = V21 + a step list in fixed columns: every row shows its program, and the columns #, Program, Waits, Marks
 ;       and What it does line up, with a header line above the list naming them. A switch ("Columns" next to
 ;       Explain steps, or right-click the list > Show columns) turns the columns off and gives the V21 list back.
@@ -14357,7 +14358,7 @@ V22_Margin(depth, indentChars) {
 V22_AppOf(node, settings := 0) {
     win := node.Get("win", "")
     if win is Map && win.Get("exe", "") != ""
-        return V20_AppName(win["exe"])
+        return StrLower(V20_AppName(win["exe"]))        ; V22.1: lower case for the column only
     t := node.Get("type", "")
     if SubStr(t, 1, 4) = "web_"
         return "web page"
@@ -14365,7 +14366,7 @@ V22_AppOf(node, settings := 0) {
         target := Trim(node["target"])
         if target = "" && settings is Map
             target := Trim(settings.Get("defaultTarget", ""))
-        return target = "" ? "" : V20_TargetName(target)
+        return target = "" ? "" : StrLower(V20_TargetName(target))     ; V22.1: lower case for the column only
     }
     return ""
 }
@@ -15562,7 +15563,9 @@ V4_SelfTest(path) {
             Map("type", "text", "win", v22B), Map("type", "keys", "win", Map("exe", "NOTEPAD.EXE"))]
         v22R := V22_FillApps(v22S)
         check("V22 fill A A B B A", v22R.App[v22S[1]] . "," . v22R.App[v22S[2]] . "," . v22R.App[v22S[3]] . "," . v22R.App[v22S[4]] . "," . v22R.App[v22S[5]],
-            "notepad,notepad,calc,calc,NOTEPAD")
+            "notepad,notepad,calc,calc,notepad")
+        check("V22.1 program names in lower case, web page unchanged", V22_AppOf(Map("type", "click", "win", Map("exe", "NOTEPAD.EXE"))) . "|"
+            . V22_AppOf(Map("type", "det_use_window", "target", "ahk_exe CALC.EXE")) . "|" . V22_AppOf(Map("type", "web_click", "selector", "#a")), "notepad|calc|web page")
         check("V22 starts A A B B A", v22R.Starts.Has(v22S[1]) . v22R.Starts.Has(v22S[2]) . v22R.Starts.Has(v22S[3]) . v22R.Starts.Has(v22S[4]) . v22R.Starts.Has(v22S[5]), "10101")
         v22S := [Map("type", "click", "win", v22A), Map("type", "delay", "ms", 500), Map("type", "repeat", "count", 2, "body", []), Map("type", "keys", "win", v22A)]
         v22R := V22_FillApps(v22S)
