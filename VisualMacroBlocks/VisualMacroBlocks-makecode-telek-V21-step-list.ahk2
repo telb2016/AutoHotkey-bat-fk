@@ -716,7 +716,7 @@ VMB_NodeLabel(node) {
             . (meaning != "" ? "   → " . meaning : "")
             . (sum[2] != "" ? "      [" . sum[2] . "]" : "") . (s.ShowMeaning ? V13_StepBadges(node) : "") . " "
     }
-    text := VMF_BlockText(node)
+    text := s.ShowMeaning ? V21_BlockLine(node) : VMF_BlockText(node)      ; V21: same plain style as the step lines
     t := node.Get("type", "")
     if t = "foreach" && !VMB_HasData()
         text .= "      (choose a data file above!)"
@@ -14162,6 +14162,69 @@ V21_MoreSentence(node) {
     return ""
 }
 
+; @summary A condition in plain words for the macro list. For a variable: "amount is 250", "amount is not 250",
+;          "name contains x", "name is empty", "name is not empty" ...; other conditions use VMF__CondText.
+; @tags macro, explain, gui, v21
+V21_CondText(node) {
+    static ops := Map("=", "is", "!=", "is not", "<", "is less than", ">", "is more than", "<=", "is at most",
+        ">=", "is at least", "contains", "contains")
+    if node.Get("cond", "image") != "var"
+        return VMF__CondText(node)
+    name := node.Get("name", "?"), op := node.Get("op", "=")
+    if op = "empty" || op = "notempty"
+        return name . (op = "empty" ? " is empty" : " is not empty")
+    return name . " " . ops.Get(op, op) . " " . node.Get("value", "")
+}
+
+; @summary The text of a container / control row in the macro list, in the same plain style as the step lines
+;          ("Repeat 5 times  (4 steps inside)", "If amount is 250", "Leave the loop" ...), with the "  // note" suffix.
+;          Kinds it does not know use VMF_BlockText. VMF_BlockText itself is unchanged (code view, saved text).
+; @tags macro, explain, gui, v21
+V21_BlockLine(node) {
+    static stops := Map("break", "Leave the loop", "continue", "Go on with the next round of the loop",
+        "nextrow", "Skip this data row (it counts as failed)", "endrun", "End the run here (it counts as done)",
+        "stop", "Stop the run")
+    t := node.Get("type", "")
+    inside := ""
+    if VMF_IsContainer(node) {
+        n := VMF_CountSteps(VMF_Children(node)[1])
+        inside := n = 0 ? "  (no steps inside yet)" : "  (" . n . (n = 1 ? " step" : " steps") . " inside)"
+    }
+    switch t {
+        case "repeat":
+            count := node.Get("count", 1)
+            line := "Repeat " . count . (count = 1 ? " time" : " times") . inside
+        case "foreach":
+            line := "For each row of the list" . inside
+        case "for":
+            stepBy := node.Get("step", 1)
+            line := "Count " . node.Get("name", "i") . " from " . node.Get("from", 1) . " to " . node.Get("to", 10)
+                . (stepBy = 1 ? "" : " in steps of " . stepBy) . inside
+        case "until":
+            line := "Repeat until " . V21_CondText(node) . (node.Get("check", "") = "after" ? ", checked after each round" : "")
+                . "  (at most " . node.Get("max", 100) . " times)"
+        case "if":
+            line := "If " . V21_CondText(node)
+        case "set":
+            name := node.Get("name", "?"), value := node.Get("value", "")
+            line := node.Get("ask", 0) ? "Ask me for " . name . (value = "" ? "" : ' (suggests "' . V20_Short(value, 40) . '")')
+                : 'Remember "' . V20_Short(value, 40) . '" as ' . name
+        case "change":
+            name := node.Get("name", "?"), by := node.Get("by", 1)
+            line := IsNumber(by) && by < 0 ? "Take " . Abs(by) . " from " . name : "Add " . by . " to " . name
+        case "ask":
+            line := "Ask me: " . node.Get("prompt", "")
+        case "stop":
+            action := node.Get("action", "break")
+            line := stops.Get(action, action)
+        case "call":
+            line := "Run the macro " . RegExReplace(node.Get("path", ""), ".*[\\/]")
+        default:
+            return VMF_BlockText(node)
+    }
+    return line . (node.Get("note", "") = "" ? "" : "  // " . node["note"])
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -15030,6 +15093,39 @@ V4_SelfTest(path) {
         check("V21 human click line", V20_StepLine(V4_CreateNode("det_human_click")), "Click at (300, 200) with a human-like move")
         check("V21 predict row line", V20_StepLine(V4_CreateNode("det_predict_row")), 'Pick "{{Product}}" in the list (row is worked out)')
         check("V21 unknown kind keeps the older line", V20_StepLine(Map("type", "mystery")), "")
+        v21Body := [Map("type", "delay", "ms", 1), Map("type", "delay", "ms", 2), Map("type", "repeat", "count", 2,
+            "body", [Map("type", "delay", "ms", 3)])]
+        check("V21 repeat row", V21_BlockLine(Map("type", "repeat", "count", 5, "body", v21Body)), "Repeat 5 times  (4 steps inside)")
+        check("V21 empty repeat row", V21_BlockLine(Map("type", "repeat", "count", 1, "body", [])), "Repeat 1 time  (no steps inside yet)")
+        check("V21 for each row", V21_BlockLine(Map("type", "foreach", "body", v21Body)), "For each row of the list  (4 steps inside)")
+        check("V21 count row", V21_BlockLine(Map("type", "for", "name", "i", "from", 1, "to", 10, "step", 1, "body", v21Body)),
+            "Count i from 1 to 10  (4 steps inside)")
+        check("V21 count row in steps of 2", V21_BlockLine(Map("type", "for", "name", "i", "from", 1, "to", 10, "step", 2, "body", [v21Body[1]])),
+            "Count i from 1 to 10 in steps of 2  (1 step inside)")
+        check("V21 repeat until row", V21_BlockLine(Map("type", "until", "cond", "var", "name", "count", "op", ">=", "value", 3, "max", 100, "body", [])),
+            "Repeat until count is at least 3  (at most 100 times)")
+        check("V21 do ... until row", V21_BlockLine(Map("type", "until", "cond", "image", "appear", 1, "check", "after", "max", 20, "body", [])),
+            "Repeat until image appears, checked after each round  (at most 20 times)")
+        check("V21 if rows", V21_BlockLine(Map("type", "if", "cond", "var", "name", "amount", "op", "=", "value", 250, "body", [], "else", []))
+            . "|" . V21_BlockLine(Map("type", "if", "cond", "image", "appear", 0, "body", [], "else", [])),
+            "If amount is 250|If image is absent")
+        check("V21 conditions in words", V21_CondText(Map("cond", "var", "name", "a", "op", "!=", "value", 1)) . "|"
+            . V21_CondText(Map("cond", "var", "name", "a", "op", "contains", "value", "x")) . "|" . V21_CondText(Map("cond", "var", "name", "a", "op", "empty"))
+            . "|" . V21_CondText(Map("cond", "var", "name", "a", "op", "notempty")) . "|" . V21_CondText(Map("cond", "var", "name", "a", "op", "<", "value", 2)),
+            "a is not 1|a contains x|a is empty|a is not empty|a is less than 2")
+        check("V21 web condition reuses the old text", V21_CondText(V4_CreateNode("web_if")), VMF__CondText(V4_CreateNode("web_if")))
+        check("V21 set rows", V21_BlockLine(Map("type", "set", "name", "amount", "value", "250")) . "|"
+            . V21_BlockLine(Map("type", "set", "name", "amount", "value", "250", "ask", 1)), 'Remember "250" as amount|Ask me for amount (suggests "250")')
+        check("V21 change rows", V21_BlockLine(Map("type", "change", "name", "count", "by", 1)) . "|" . V21_BlockLine(Map("type", "change", "name", "count", "by", -2)),
+            "Add 1 to count|Take 2 from count")
+        check("V21 ask row", V21_BlockLine(Map("type", "ask", "prompt", "Check the screen. Continue?")), "Ask me: Check the screen. Continue?")
+        check("V21 stop rows", V21_BlockLine(Map("type", "stop", "action", "break")) . "|" . V21_BlockLine(Map("type", "stop", "action", "continue"))
+            . "|" . V21_BlockLine(Map("type", "stop", "action", "nextrow")) . "|" . V21_BlockLine(Map("type", "stop", "action", "endrun"))
+            . "|" . V21_BlockLine(Map("type", "stop", "action", "stop")),
+            "Leave the loop|Go on with the next round of the loop|Skip this data row (it counts as failed)|End the run here (it counts as done)|Stop the run")
+        check("V21 run macro row", V21_BlockLine(Map("type", "call", "path", "C:\macros\orders.vmacro.json")), "Run the macro orders.vmacro.json")
+        check("V21 note kept on block rows", V21_BlockLine(Map("type", "repeat", "count", 2, "body", [], "note", "twice")), "Repeat 2 times  (no steps inside yet)  // twice")
+        check("V21 other blocks keep the older text", V21_BlockLine(Map("type", "ndc", "name", "ndc", "source", "")), VMF_BlockText(Map("type", "ndc", "name", "ndc", "source", "")))
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
