@@ -226,7 +226,7 @@ VMB() {
         ItemColor: Map(), ItemKind: Map(), ItemState: Map(), PalColor: Map(), PalDesc: Map(), Undo: [], Redo: [], Clip: "", PlayFlat: [], HiItem: 0,
         FontSize: 9, Checked: Map(), AnchorNode: 0, CloseNotified: false, AutoSavePath: "", LastSavedAt: "",
         LastEditedStep: "", IdleHud: 0, OpenExes: 0, QuickLookGui: 0, Insp: 0, InspShown: 1, ShowMeaning: 1,
-        Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map(),
+        Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map(), Shaky: Map(),
         Columns: 1, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0}
     return s
 }
@@ -680,6 +680,7 @@ VMB_Refresh(selectNode := "") {
     s.MaxDepth := V22_MaxDepth(s.Macro["blocks"])               ; V22.1: the left margin is sized to the deepest row
     r := V22_FillApps(VMF_Flatten(s.Macro["blocks"]), s.Macro["settings"])     ; V22: the Program column, every row
     s.OpenExes := V24_OpenExes()                                ; V24: which programs are running right now (only here, no timer)
+    s.Shaky := V25_Shaky(V25_ReadRuns(s.Path))                  ; V25: steps with a note in 3 or more of the last 10 runs (history file read once here)
     V24_MarkApps(r.App, s.OpenExes, VMF_Flatten(s.Macro["blocks"]))     ; V24: "notepad?" when it is not running
     s.ColApp := r.App, s.ColStarts := r.Starts
     tv.Opt("-Redraw")
@@ -754,7 +755,7 @@ VMB_NodeLabel(node, depth := unset) {
         num := s.FlatIndex.Get(node, "?"), lastNote := s.LastNotes.Get(num, "")      ; V21: a note in the last run
         if cols
             return V22_Row(num, s.ColApp is Map ? s.ColApp.Get(node, "") : "", s.ColStarts is Map && s.ColStarts.Has(node),
-                V22_WaitText(node), V22_Marks(node, lastNote), off . V22_Sentence(node, lastNote), depth, s.IndentChars, s.MaxDepth) . " "
+                V22_WaitText(node), V22_Marks(node, lastNote, s.Shaky.Has(num)), off . V22_Sentence(node, lastNote), depth, s.IndentChars, s.MaxDepth) . " "
         mark := lastNote = "" ? "" : " ⚠", noteTag := lastNote = "" ? "" : V21_NoteTag(lastNote)
         line := s.ShowMeaning ? V20_StepLine(node) : ""        ; V20: one plain sentence per step
         if line != ""
@@ -12585,7 +12586,8 @@ V17_EasyHelp(*) {
         . "  every row (a Wait step shows the program of the step before it)."
         . "`n• Waits = the pause before the step. A * after the time (500 ms*) = a wait you set by hand."
         . "`n• Marks: ► the task moves to another program here, ↕ the list is scrolled back first, ⚡ changes each round,"
-        . "  ◇ uses whatever window is active, ✎ has your note, ⚠ had a note in the last run."
+        . "  ◇ uses whatever window is active, ✎ has your note, ⚠ had a note in the last run, ≈ often shaky (a note in 3 or more of"
+        . "  the last 10 runs - check this step)."
         . "`n• Right-click the list -> Show columns (or the Columns tick box in the Step settings panel) for the V21 lines."
         . "`n`nNeed CSV rows, web pages, pictures or anything else? Click 'More features ▸' (Ctrl+Shift+E)."
         . "`nEmergency exit: Ctrl+Shift+X." . V22_ColumnCheckLine(VMB().IndentSeen), "Visual Macro Blocks V18 - Easy mode", "Iconi")
@@ -14457,7 +14459,7 @@ V22_WaitText(node) {
 ; @summary The Marks column, one character each, in this order and only when it applies: list scrolled back first,
 ;          changes each round, whatever window is active, has a note, had a note in the last run.
 ; @tags macro, gui, columns, v22
-V22_Marks(node, lastNote := "") {
+V22_Marks(node, lastNote := "", shaky := false) {
     chars := V22_MarkChars(), out := ""
     if node.Get("scroll", "") is Map
         out .= chars["scroll"]
@@ -14469,6 +14471,8 @@ V22_Marks(node, lastNote := "") {
         out .= chars["note"]
     if lastNote != ""
         out .= chars["warn"]
+    if shaky
+        out .= chars["shaky"]                   ; V25: had a note in 3 or more of the last 10 runs
     return out
 }
 
@@ -14517,8 +14521,8 @@ V22_MarkChars(plain := "") {
         }
         return fromIni
     }
-    return plain ? Map("scroll", "S", "vary", "V", "active", "A", "note", "N", "warn", "!", "start", ">")
-        : Map("scroll", "↕", "vary", "⚡", "active", "◇", "note", "✎", "warn", "⚠", "start", "►")
+    return plain ? Map("scroll", "S", "vary", "V", "active", "A", "note", "N", "warn", "!", "start", ">", "shaky", "~")
+        : Map("scroll", "↕", "vary", "⚡", "active", "◇", "note", "✎", "warn", "⚠", "start", "►", "shaky", "≈")
 }
 
 ; @summary V22.1: the deepest TREE level that will hold a row for this block list (0 = nothing nested). Counted the way
@@ -15040,6 +15044,29 @@ V25_Summary(runs) {
     return text
 }
 
+; @summary The steps that were "often shaky": step numbers that had a note in 3 or more of the last 10 runs
+;          (runs = oldest first) -> Map step number -> 1.
+; @tags macro, playback, history, v25
+V25_Shaky(runs) {
+    shaky := Map()
+    if !(runs is Array)
+        return shaky
+    counts := Map()
+    loop Min(10, runs.Length) {
+        seen := Map()
+        for st in runs[runs.Length - A_Index + 1]["NoteSteps"] {
+            if !seen.Has(st) {
+                seen[st] := 1
+                counts[st] := counts.Get(st, 0) + 1
+            }
+        }
+    }
+    for st, c in counts
+        if c >= 3
+            shaky[st] := 1
+    return shaky
+}
+
 ; @summary "Run history..." menu entry: a small window with the summary line on top and the runs below, newest first.
 ; @tags macro, gui, history, v25
 V25_ShowHistory(*) {
@@ -15172,7 +15199,8 @@ V4_Help(*) {
         . "  every row (a Wait step shows the program of the step before it)."
         . "`n• Waits = the pause before the step. A * after the time (500 ms*) = a wait you set by hand."
         . "`n• Marks: ► the task moves to another program here, ↕ the list is scrolled back first, ⚡ changes each round,"
-        . "  ◇ uses whatever window is active, ✎ has your note, ⚠ had a note in the last run."
+        . "  ◇ uses whatever window is active, ✎ has your note, ⚠ had a note in the last run, ≈ often shaky (a note in 3 or more of"
+        . "  the last 10 runs - check this step)."
         . "`n• Right-click the list -> Show columns (or the Columns tick box in the Step settings panel) for the V21 lines."
         . "`n`nNEW IN V21 (a step list you can read at a glance):"
         . "`n• The program is named only where the task moves to another one:  Type `"5`" → in calc."
@@ -16178,6 +16206,17 @@ V4_SelfTest(path) {
             v25Old.Push(v25R("w", A_Index <= 2 ? "Failed at step 1" : "Finished", 10, [], A_Index <= 2 ? 1 : 0))
         check("V25 summary: only the last 10 runs count", V25_Summary(v25Old), "Last 10 runs: 10 finished. Usually 10 s.")
         check("V25 summary: all stopped, one note", V25_Summary([v25R("w", "Stopped", 1, [4])]), "Last run: 1 stopped. Step 4 had notes in 1 run.")
+        v25Sh := []
+        loop 12
+            v25Sh.Push(v25R("w", "Finished", 1, A_Index <= 2 ? [5] : (A_Index <= 5 ? [7, 2] : (A_Index = 6 ? [2] : []))))
+        v25S := V25_Shaky(v25Sh)
+        check("V25 shaky: only the last 10 runs count (step 5 had notes only in runs 1-2, step 7 in 3, step 2 in 4)", V4_Join(v25S.Count ? [v25S.Has(2) ? 2 : 0, v25S.Has(5) ? 5 : 0, v25S.Has(7) ? 7 : 0] : [], ","), "2,0,7")
+        check("V25 shaky: two runs with a note is not enough", V25_Shaky([v25R("w", "Finished", 1, [4]), v25R("w", "Finished", 1, [4])]).Count, 0)
+        check("V25 shaky: no runs, not a list", V25_Shaky([]).Count . V25_Shaky(0).Count, "00")
+        check("V25 shaky: a note twice in one run counts once", V25_Shaky([v25R("w", "Finished", 1, [4, 4]), v25R("w", "Finished", 1, [4])]).Count, 0)
+        check("V25 marks: shaky mark comes last", V22_Marks(Map("type", "click", "note", "x"), "Step #1: y", true), V22_MarkChars()["note"] . V22_MarkChars()["warn"] . V22_MarkChars()["shaky"])
+        check("V25 marks: not shaky adds nothing", V22_Marks(Map("type", "click")), "")
+        check("V25 mark characters: symbol and plain", V22_MarkChars(0)["shaky"] . V22_MarkChars(1)["shaky"], "≈~")
         DirDelete(v25Dir, true)
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
