@@ -223,7 +223,7 @@ VMB() {
         FlatIndex: Map(), PalItems: Map(), Drag: 0, RecSteps: 0, RecTarget: 0, DataCache: Map(),
         ItemColor: Map(), ItemKind: Map(), ItemState: Map(), PalColor: Map(), PalDesc: Map(), Undo: [], Redo: [], Clip: "", PlayFlat: [], HiItem: 0,
         FontSize: 9, Checked: Map(), AnchorNode: 0, CloseNotified: false, AutoSavePath: "", LastSavedAt: "",
-        LastEditedStep: "", IdleHud: 0, QuickLookGui: 0, Insp: 0, InspShown: 1, ShowMeaning: 1,
+        LastEditedStep: "", IdleHud: 0, OpenExes: 0, QuickLookGui: 0, Insp: 0, InspShown: 1, ShowMeaning: 1,
         Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map(),
         Columns: 1, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0}
     return s
@@ -677,6 +677,8 @@ VMB_Refresh(selectNode := "") {
     s.AppShow := V21_AppRuns(VMF_Flatten(s.Macro["blocks"]))     ; V21: say the program only when it changes
     s.MaxDepth := V22_MaxDepth(s.Macro["blocks"])               ; V22.1: the left margin is sized to the deepest row
     r := V22_FillApps(VMF_Flatten(s.Macro["blocks"]), s.Macro["settings"])     ; V22: the Program column, every row
+    s.OpenExes := V24_OpenExes()                                ; V24: which programs are running right now (only here, no timer)
+    V24_MarkApps(r.App, s.OpenExes, VMF_Flatten(s.Macro["blocks"]))     ; V24: "notepad?" when it is not running
     s.ColApp := r.App, s.ColStarts := r.Starts
     tv.Opt("-Redraw")
     tv.Delete()
@@ -11659,6 +11661,7 @@ V13_InspCommit(*) {
     } else {
         s.AppShow := V21_AppRuns(VMF_Flatten(s.Macro["blocks"]))     ; V21: keep the "in <program>" marks up to date
         r := V22_FillApps(VMF_Flatten(s.Macro["blocks"]), s.Macro["settings"])     ; V22: and the Program column
+        V24_MarkApps(r.App, s.OpenExes, VMF_Flatten(s.Macro["blocks"]))     ; V24: same "?" marks as the last refresh
         s.ColApp := r.App, s.ColStarts := r.Starts
         s.TV.Modify(s.NodeItem[owner], , VMB_NodeLabel(owner))
         V13_InspLoad(false)
@@ -14827,6 +14830,32 @@ V24_ToggleCheck(*) {
     IniWrite(s.Preflight, s.Ini, "V24", "Preflight")
 }
 
+; @summary The Program column text: the name, with a "?" after it when that program is not running right now.
+;          known = Map of the exe names the macro uses (a window class or "web page" is never marked); 0 = mark any name.
+;          openExes = 0 (not looked at yet) = never marked.
+; @tags macro, gui, preflight, v24
+V24_AppCell(app, openExes, known := 0) {
+    if app = "" || !(openExes is Map)
+        return app
+    exe := app . ".exe"
+    if known is Map && !known.Has(exe)
+        return app
+    return openExes.Has(exe) || openExes.Has(app) ? app : app . "?"
+}
+
+; @summary Puts the "?" (V24_AppCell) into the Program column texts of V22_FillApps, in place. flat = VMF_Flatten(blocks).
+; @tags macro, gui, preflight, v24
+V24_MarkApps(apps, openExes, flat) {
+    known := Map()
+    for use in V24_Programs(flat)
+        known[use[1]] := 1
+    steps := []
+    for step in apps
+        steps.Push(step)
+    for step in steps
+        apps[step] := V24_AppCell(apps[step], openExes, known)
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -15878,6 +15907,15 @@ V4_SelfTest(path) {
         check("V24 preflight: Use Window and Normalize targets count", v24R.Length . "|" . v24R[2], "2|msedge is not open - step 2 uses it.")
         check("V24 preflight: a window class alone is not a program", V24_Preflight([Map("type", "det_use_window", "target", "ahk_class Notepad")], Map(), Map(), "").Length, 0)
         check("V24 preflight: ask-each-run text is not a problem", V24_Preflight([Map("type", "text", "ask", 1, "win", v24Np)], Map(), v24All, "").Length, 0)
+        v24Run := Map("notepad.exe", 1)
+        check("V24 app cell: a running program has no mark", V24_AppCell("notepad", v24Run), "notepad")
+        check("V24 app cell: a program that is not running gets ?", V24_AppCell("msedge", v24Run), "msedge?")
+        check("V24 app cell: an empty cell stays empty", V24_AppCell("", v24Run), "")
+        check("V24 app cell: not looked at yet = no mark", V24_AppCell("msedge", 0), "msedge")
+        check("V24 app cell: a name the macro does not use as a program is not marked", V24_AppCell("web page", v24Run, Map("msedge.exe", 1)), "web page")
+        v24Apps := Map(v24S[1], "notepad", v24S[3], "msedge")
+        V24_MarkApps(v24Apps, v24Run, v24S)
+        check("V24 mark apps: only the closed program gets ?", v24Apps[v24S[1]] . "|" . v24Apps[v24S[3]], "notepad|msedge?")
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
