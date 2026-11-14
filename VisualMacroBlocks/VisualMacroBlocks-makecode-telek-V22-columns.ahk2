@@ -220,7 +220,7 @@ VMB() {
         FontSize: 9, Checked: Map(), AnchorNode: 0, CloseNotified: false, AutoSavePath: "", LastSavedAt: "",
         LastEditedStep: "", IdleHud: 0, QuickLookGui: 0, Insp: 0, InspShown: 1, ShowMeaning: 1,
         Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map(),
-        Columns: 1, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0}
+        Columns: 1, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0}
     return s
 }
 
@@ -14537,6 +14537,7 @@ V22_ApplyTreeFont(refresh := true) {
     DllCall("SelectObject", "Ptr", hdc, "Ptr", oldFont, "Ptr")
     DllCall("ReleaseDC", "Ptr", s.TV.Hwnd, "Ptr", hdc)
     charW := Max(1, NumGet(ext, 0, "Int") / 10)
+    s.CharH := NumGet(ext, 4, "Int")                                       ; V22.1: text height in pixels, for the header line
     before := s.IndentChars
     want := Round(charW * s.IndentChars)
     SendMessage(0x1107, want, 0, s.TV)
@@ -14548,6 +14549,13 @@ V22_ApplyTreeFont(refresh := true) {
     s.IndentSeen := "char " . charW . " px, asked " . want . " px, got " . actual . " px, " . s.IndentChars . " characters"
     if refresh && s.IndentChars != before
         VMB_Refresh()
+}
+
+; @summary V22.1: height of the header line in the window's 96-dpi units: the tree font's text height in pixels
+;          (s.CharH) + 2, converted from screen pixels; 16 when the height is not known (charH < 1).
+; @tags macro, gui, columns, v22
+V22_HeaderHeight(charH, dpi := A_ScreenDPI) {
+    return charH < 1 ? 16 : Round((charH + 2) * 96 / dpi)
 }
 
 ; @summary Puts the column-name line right above the macro tree, its left edge where the first row's text starts
@@ -14569,9 +14577,18 @@ V22_PlaceHeader() {
             pt := Buffer(8, 0)
             NumPut("Int", NumGet(rc, 0, "Int"), "Int", 0, pt)
             DllCall("MapWindowPoints", "Ptr", s.TV.Hwnd, "Ptr", s.Gui.Hwnd, "Ptr", pt, "UInt", 1)     ; tree -> window
-            s.TV.GetPos(&tx, &ty, &tw)
+            s.TV.GetPos(&tx, &ty, &tw, &th)
+            head.GetPos(, &hy)
+            hh := V22_HeaderHeight(s.CharH)                                ; V22.1: the header follows the font height
+            if ty - hy != hh {                                             ; the tree starts hh below the header: move its top
+                shift := hh - (ty - hy)                                    ; and height by the same amount (bottom stays)
+                s.TV.Move(, ty + shift, , Max(80, th - shift))
+                ty += shift, th -= shift
+                if s.Insp
+                    V13_InspLayout(tx + tw + 10, ty, s.Insp.Width, th)     ; the Step settings panel follows the tree
+            }
             hx := Round(NumGet(pt, 0, "Int") * 96 / A_ScreenDPI)           ; the window's controls use 96-dpi units
-            head.Move(hx, ty - 16, Max(50, tx + tw - hx), 16)
+            head.Move(hx, hy, Max(50, tx + tw - hx), hh)
         }
     }
     head.Visible := show
@@ -15646,6 +15663,7 @@ V4_SelfTest(path) {
         check("V22.1 maxDepth: IF counts its ELSE row and the empty ELSE placeholder", V22_MaxDepth([v22If]), 2)
         check("V22.1 maxDepth: ELSE IF body holding a Repeat is three levels", V22_MaxDepth([v22IfE]), 3)
         check("V22.1 maxDepth: a Repeat inside a Repeat", V22_MaxDepth([Map("type", "repeat", "count", 1, "body", [v22Rep])]), 2)
+        check("V22.1 header height = text height + 2 (96 dpi / 144 dpi / unknown)", V22_HeaderHeight(16, 96) . "," . V22_HeaderHeight(30, 96) . "," . V22_HeaderHeight(20, 144) . "," . V22_HeaderHeight(0, 96), "18,32,15,16")
         check("V22 rows deeper than 8 levels keep no margin", InStr(V22_Row(3, "x", false, "", "", "", 9, 3), "3"), 1)
         check("V22 sentence: no older form needed / older form / note and last run", V22_Sentence(Map("type", "delay", "ms", 500)) . "|"
             . V22_Sentence(Map("type", "input_keydelay", "delay", 30, "duration", 30)) . "|"
