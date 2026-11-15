@@ -4,13 +4,27 @@ You are testing a program on a real Windows PC because the people who built it o
 run the checks below, write down exactly what happened, and hand back one results file. You are a tester, not a
 developer: **do not change the script.** If something fails, record it and go on.
 
+## Where you may write files (the first version of this document got this wrong - follow it exactly)
+- EVERYTHING you create goes into ONE local folder: `C:\Temp\vmb\` (create it). That means the script copy, the
+  self-test report, test macros, your results file, screenshots, notes, and any helper script you write.
+- NEVER write to any other drive or folder: no network or mapped drives (Q:, H:, S: ...), no home drive, no shared
+  folders, no OneDrive / Documents, no Desktop, not your own working directory if it is anywhere else.
+  If `C:\Temp\vmb\` cannot be created or written, STOP and tell the owner. Do not pick another place.
+- NEVER let a Save / Save As / Export dialog save anything, in Notepad or in the program, except when a step below
+  tells you to save a test macro - and then type the FULL path starting with `C:\Temp\vmb\` yourself; never accept
+  the folder the dialog opens in (it is often a network home drive).
+- When Notepad asks "Do you want to save changes?" answer **Don't Save**.
+- Do not push or upload anything anywhere. Hand the results file to the owner.
+- LAST STEP of the whole test: list every file you created, with its full path, in the results file.
+
 ## Safety rules (read first - this is a work computer)
 1. Test ONLY against **Notepad** and the small test windows the program opens itself. Never record, click or type in
    Citrix, Edge, an electronic health record, email, or anything holding patient or work data.
 2. Never type real names, patient data or passwords. Use the made-up values given below (Smith, Jones, 250 ...).
 3. Do not open, play or change the owner's existing macros. Start each check from **New** (an empty macro).
-4. If any box asks to save over an existing file, say No / Cancel. Save test macros only into a new folder
-   `Documents\VisualMacros\ai-test\`.
+4. If any box asks to save over an existing file, say No / Cancel. Save test macros only into `C:\Temp\vmb\`.
+   Note: the program itself keeps its settings, an autosave draft and its run history in `Documents\VisualMacros\`
+   on its own; that is expected and is the only place outside `C:\Temp\vmb\` where files may appear.
 5. The emergency stop is **Ctrl+Shift+X** (quits the program). **Esc** stops a running macro.
 6. If the mouse or keyboard starts doing something you did not expect, press Esc, then Ctrl+Shift+X, and write it down.
 
@@ -46,7 +60,8 @@ Do this slowly, like a person would.
 9. Clear Notepad and press **Play** twice more. Report whether the text was identical all three times.
 10. Close Notepad completely. Press **Play**. Expected: a box "Ready to play?" naming notepad; choose **No**. Report
     the box text. Then open Notepad again.
-11. Save the macro as `Documents\VisualMacros\ai-test\notepad-test.vmacro.json`.
+11. Save the macro: click **Save as**, and in the file-name box type the full path
+    `C:\Temp\vmb\notepad-test.vmacro.json` (do not browse; do not accept the folder the dialog shows).
 
 ## Part 3 - scroll position (could never be tested on Linux)
 1. Notepad: turn Word Wrap off, paste 300 short lines (`line 1` ... `line 300`), scroll so about line 150 is at the top.
@@ -57,10 +72,11 @@ Do this slowly, like a person would.
    line as when recording) and the status bar text.
 
 ## Part 4 - what the grid knows about a click
-1. **New**, **Record**. In Notepad: click the **File** menu, click **Save As...**, in the Save dialog click **Cancel**,
-   click Notepad's **Maximize** button, click it again to restore. Stop.
-2. Report the **On what** cell and the **Window** cell of each Click row. Expected along the lines of: menu "File",
-   menu item "Save As...", the "Cancel" button, Maximize button. Write exactly what you see, including `–`.
+1. **New**, **Record**. In Notepad: click the **Edit** menu, click **Go To...** (classic Notepad; in the Windows 11
+   Notepad use **Edit > Find**), in the small box that opens click **Cancel** (or its X), click Notepad's **Maximize**
+   button, click it again to restore. Stop. Do NOT open any Save, Save As, Open or Print dialog in this part.
+2. Report the **On what** cell and the **Window** cell of each Click row. Expected along the lines of: menu "Edit",
+   menu item "Go To...", the "Cancel" button, Maximize button. Write exactly what you see, including `–`.
 
 ## Part 5 - the grid as a spreadsheet (use the Part 2 macro: Open `notepad-test`)
 For each line write PASS or FAIL and one sentence on what happened.
@@ -109,5 +125,5 @@ Write `PC-TEST-RESULTS.md` with: date, Windows version, AutoHotkey version and 3
 scaling (Settings > Display), which Notepad (classic or Windows 11 tabbed), then one section per Part with the reports
 asked for above. Quote program messages word for word. Add screenshots of anything that looks wrong (grid drawing,
 overlapping controls, empty boxes instead of symbols) - make sure a screenshot shows only Notepad and the program.
-Give the file to the owner; if you have write access to the repository, also put it in the `VisualMacroBlocks` folder
-on the same branch.
+Write it to `C:\Temp\vmb\PC-TEST-RESULTS.md` (screenshots in the same folder) and tell the owner it is there.
+Do not put it anywhere else. End the file with the list of every file you created (full paths).
