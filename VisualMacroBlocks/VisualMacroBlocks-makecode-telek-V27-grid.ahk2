@@ -15441,6 +15441,313 @@ V27_ScrollOne(ctl, id, offX, isEdit) {
 ; @tags pccheck, scroll, v27
 V27_ScrollLine(name, v) => V26_Line(v.Ok, "Scroll (" . name . "): " . SubStr(v.Text, 9))
 
+; ----------------------------------------------------------------------------
+; V27 item A: the cell data of the step grid (pure: no windows, no mouse)
+; ----------------------------------------------------------------------------
+
+; @summary The grid's columns in order. Key = the cell key, Title = header text, Width = start width in pixels,
+;          Num = 1 when the column sorts as a number.
+; @tags grid, cells, v27
+V27_Columns() {
+    return [
+        {Key: "num", Title: "#", Width: 40, Num: 1},
+        {Key: "inside", Title: "Inside", Width: 220, Num: 0},
+        {Key: "app", Title: "Program", Width: 110, Num: 0},
+        {Key: "window", Title: "Window", Width: 120, Num: 0},
+        {Key: "winsize", Title: "Window size", Width: 110, Num: 0},
+        {Key: "action", Title: "Action", Width: 100, Num: 0},
+        {Key: "target", Title: "On what", Width: 200, Num: 0},
+        {Key: "text", Title: "Text / keys", Width: 220, Num: 0},
+        {Key: "button", Title: "Button", Width: 70, Num: 0},
+        {Key: "clicks", Title: "Clicks", Width: 60, Num: 1},
+        {Key: "held", Title: "Held keys", Width: 100, Num: 0},
+        {Key: "x", Title: "X", Width: 60, Num: 1},
+        {Key: "y", Title: "Y", Width: 60, Num: 1},
+        {Key: "zone", Title: "Where", Width: 130, Num: 0},
+        {Key: "anchor", Title: "Follows", Width: 150, Num: 0},
+        {Key: "wait", Title: "Waits first", Width: 90, Num: 0},
+        {Key: "scroll", Title: "Scroll back", Width: 110, Num: 0},
+        {Key: "check", Title: "Checks picture", Width: 90, Num: 0},
+        {Key: "lastrun", Title: "Last run", Width: 160, Num: 0},
+        {Key: "shaky", Title: "Often shaky", Width: 100, Num: 0},
+        {Key: "onoff", Title: "On", Width: 50, Num: 0},
+        {Key: "note", Title: "Note", Width: 220, Num: 0}
+    ]
+}
+
+; @summary The cell texts of one step (one grid row). Every column key always has a value: "–" (en dash) when it does not
+;          apply. ctx = Map with Num, App, Inside, LastNote, HasRun, Shaky, History, Size, Settings (missing keys = defaults).
+;          Size is the size carried from an earlier step of the same program (used when this step has no size of its own).
+; @returns Map Key -> text
+; @tags grid, cells, v27
+V27_Cells(node, ctx) {
+    t := node.Get("type", "")
+    mouse := t = "click" || t = "drag"
+    geo := node.Get("geo", "")
+    hasGeo := geo is Map
+    own := V27_OwnSize(node)
+    m := Map()
+    m["num"] := ctx.Get("Num", "")
+    m["inside"] := ctx.Get("Inside", "")
+    m["app"] := ctx.Get("App", "")
+    m["window"] := V27_WindowText(node)
+    m["winsize"] := own != "" ? own : ctx.Get("Size", "")
+    m["action"] := V27_ActionText(node)
+    m["target"] := V27_TargetText(node)
+    m["text"] := V27_TextText(node)
+    m["button"] := mouse ? node.Get("button", "Left") : ""
+    m["clicks"] := mouse ? String(Integer(node.Get("count", 1))) : ""
+    m["held"] := mouse ? V27_HeldText(node.Get("mods", "")) : ""
+    m["x"] := (hasGeo && geo.Has("cx")) ? geo["cx"] : (node.Has("scrX") ? node["scrX"] : "")
+    m["y"] := (hasGeo && geo.Has("cy")) ? geo["cy"] : (node.Has("scrY") ? node["scrY"] : "")
+    m["zone"] := (hasGeo && geo.Has("cx") && geo.Has("cy") && geo.Has("cw") && geo.Has("ch")) ? V20_Zone(geo["cx"], geo["cy"], geo["cw"], geo["ch"]) : ""
+    m["anchor"] := hasGeo ? SubStr(V14_AnchorText(geo), 6) : (node.Has("scrX") ? "screen spot" : "")
+    w := V22_WaitText(node)
+    m["wait"] := w = "" ? "0" : w
+    m["scroll"] := V27_ScrollText(node.Get("scroll", ""), t = "click" || t = "drag" || t = "wheel")
+    m["check"] := mouse ? V27_CheckText(node, ctx.Get("Settings", "")) : ""
+    m["lastrun"] := V27_LastRunText(ctx)
+    m["shaky"] := V27_ShakyText(ctx)
+    m["onoff"] := V4_Bool(node.Get("disabled", 0)) ? "off" : "on"
+    m["note"] := node.Get("note", "")
+    for col in V27_Columns() {
+        txt := String(m.Get(col.Key, ""))
+        m[col.Key] := txt = "" ? "–" : txt
+    }
+    return m
+}
+
+; @summary Kind of window a step uses, in plain words: "main window" (this program's own class), "dialog", "menu",
+;          else the class name. Use Window / Normalize steps show their target's class. "" when none.
+; @tags grid, cells, v27
+V27_WindowText(node, mainCls := "AutoHotkeyGUI") {
+    t := node.Get("type", "")
+    cls := ""
+    if t = "det_use_window" || t = "det_normalize_win" {
+        if RegExMatch(String(node.Get("target", "")), "i)ahk_class\s+(\S+)", &mm)
+            cls := mm[1]
+    } else {
+        win := node.Get("win", "")
+        if win is Map
+            cls := win.Get("cls", "")
+    }
+    if cls = ""
+        return ""
+    if cls = mainCls
+        return "main window"
+    if cls = "#32770"
+        return "dialog"
+    if cls = "#32768"
+        return "menu"
+    return cls
+}
+
+; @summary The window size a step records itself: "W × H" (or "maximized"); for Normalize its own size. "" when none.
+; @tags grid, cells, v27
+V27_OwnSize(node) {
+    if node.Get("type", "") = "det_normalize_win" {
+        if V4_Bool(node.Get("maximize", 0))
+            return "maximized"
+        return (node.Has("width") && node.Has("height")) ? node["width"] . " × " . node["height"] : ""
+    }
+    geo := node.Get("geo", "")
+    if geo is Map {
+        if V4_Bool(geo.Get("max", 0))
+            return "maximized"
+        if geo.Has("ww") && geo.Has("wh")
+            return geo["ww"] . " × " . geo["wh"]
+    }
+    return ""
+}
+
+; @summary The Action column: one word group for what the step does.
+; @tags grid, cells, v27
+V27_ActionText(node) {
+    t := node.Get("type", "")
+    if t = "click" {
+        if node.Get("button", "Left") = "Right"
+            return "Right-click"
+        return Integer(node.Get("count", 1)) >= 2 ? "Double-click" : "Click"
+    }
+    switch t {
+        case "drag": return "Drag"
+        case "wheel": return "Scroll"
+        case "text": return "Type"
+        case "keys": return "Press"
+        case "delay", "wait": return "Wait"
+        case "det_use_window", "det_normalize_win": return "Window"
+    }
+    if SubStr(t, 1, 4) = "web_"
+        return "Web"
+    return "Other"
+}
+
+; @summary The On what column: the clicked thing in words (clicks, drags) or the web selector name (web steps).
+; @tags grid, cells, v27
+V27_TargetText(node) {
+    t := node.Get("type", "")
+    if t = "click" || t = "drag"
+        return V20_WhatText(node)
+    if SubStr(t, 1, 4) = "web_"
+        return V21_SelectorName(node.Get("selector", ""))
+    return ""
+}
+
+; @summary The Text / keys column: typed text in quotes (never the text of an ask-each-run step), the key words of a
+;          key step, "down × 3" for a wheel step. "" for other steps.
+; @tags grid, cells, v27
+V27_TextText(node) {
+    t := node.Get("type", "")
+    q := Chr(34)
+    if t = "text" {
+        if V4_Bool(node.Get("ask", 0))
+            return "(asks each run)"
+        return q . V20_Short(node.Get("text", ""), 50) . q
+    }
+    if t = "keys"
+        return V20_KeysText(node.Get("keys", ""))
+    if t = "wheel"
+        return StrLower(RegExReplace(node.Get("direction", "WheelDown"), "i)^Wheel")) . " × " . Integer(node.Get("count", 1))
+    return ""
+}
+
+; @summary The Held keys column for a mouse step: Ctrl, Shift, Ctrl+Shift, or "none".
+; @tags grid, cells, v27
+V27_HeldText(mods) {
+    ctrlOn := InStr(mods, "^") > 0, shiftOn := InStr(mods, "+") > 0
+    if ctrlOn && shiftOn
+        return "Ctrl+Shift"
+    if ctrlOn
+        return "Ctrl"
+    return shiftOn ? "Shift" : "none"
+}
+
+; @summary The Scroll back column: "row N" (and ", col N") from the recorded scroll position (0-based, so row = pos + 1);
+;          "no" for a mouse step without one; "" for other steps.
+; @tags grid, cells, v27
+V27_ScrollText(sc, mouse) {
+    if sc is Map {
+        txt := sc.Has("v") ? "row " . (sc["v"] + 1) : ""
+        if sc.Has("h")
+            txt .= (txt = "" ? "" : ", ") . "col " . (sc["h"] + 1)
+        return txt != "" ? txt : "yes"
+    }
+    return mouse ? "no" : ""
+}
+
+; @summary The Checks picture column for a click / drag: "yes" when the macro is steady, verify clicks is on, the step has a
+;          picture and the picture still belongs to the spot (noVerify not set); else "no".
+; @tags grid, cells, v27
+V27_CheckText(node, settings) {
+    if !(settings is Map)
+        return "no"
+    ok := V4_Bool(settings.Get("steady", 0)) && settings.Get("verifyClicks", 1) != 0 && node.Get("pattern", "") != "" && !V4_Bool(node.Get("noVerify", 0))
+    return ok ? "yes" : "no"
+}
+
+; @summary The Last run column: "not run yet", "ok", or the note of the last run (step number removed, 60 characters).
+; @tags grid, cells, v27
+V27_LastRunText(ctx) {
+    if !ctx.Get("HasRun", false)
+        return "not run yet"
+    note := String(ctx.Get("LastNote", ""))
+    return note = "" ? "ok" : V20_Short(RegExReplace(note, "^Step #\d+:?\s*"), 60)
+}
+
+; @summary The Often shaky column from the run history: "yes" / "no", or "no history" when there is no history.
+; @tags grid, cells, v27
+V27_ShakyText(ctx) {
+    if !ctx.Get("History", false)
+        return "no history"
+    return ctx.Get("Shaky", false) ? "yes" : "no"
+}
+
+; @summary The Inside column: the chain of blocks a step is in, e.g. "Repeat 5 › If amount is 250"; "–" at top level.
+; @tags grid, cells, v27
+V27_InsideText(chain) => chain.Length = 0 ? "–" : V4_Join(chain, " › ")
+
+; @summary The text of a control block for the Inside chain: its line without the "(n steps inside)" part and without a note.
+; @tags grid, cells, v27
+V27_BlockLabel(node) {
+    line := V21_BlockLine(node)
+    line := RegExReplace(line, "\s+\((no steps inside yet|\d+ steps? inside)\)", "")
+    p := InStr(line, "  // ")
+    return Trim(p ? SubStr(line, 1, p - 1) : line)
+}
+
+; @summary The Inside label for one child list of a block: an IF has its own line for the first list, "Otherwise, if ..."
+;          for each ELSE IF and "Otherwise" for the ELSE list; other blocks use their own line.
+; @tags grid, cells, v27
+V27_ChildLabel(node, i) {
+    if node.Get("type", "") != "if"
+        return V27_BlockLabel(node)
+    alts := node.Get("elifs", "")
+    n := alts is Array ? alts.Length : 0
+    if i = 1
+        return V27_BlockLabel(node)
+    if i <= 1 + n
+        return "Otherwise, if " . V21_CondText(alts[i - 1])
+    return "Otherwise"
+}
+
+; @summary A new chain = chain + label (the chain is never changed in place).
+; @tags grid, cells, v27
+V27_Extend(chain, label) {
+    out := []
+    for x in chain
+        out.Push(x)
+    out.Push(label)
+    return out
+}
+
+; @summary Walks the blocks in the same order as VMF_Flatten (a node, then its child lists), and records for each node
+;          the chain of control blocks it is inside. items = array of nodes (containers too), chains = Map node -> chain.
+; @tags grid, cells, v27
+V27_Walk(list, chain, items, chains) {
+    for node in list {
+        if !(node is Map)
+            continue
+        items.Push(node)
+        chains[node] := chain
+        if VMF_IsContainer(node) {
+            kids := VMF_Children(node)
+            for i, kid in kids
+                V27_Walk(kid, V27_Extend(chain, V27_ChildLabel(node, i)), items, chains)
+        }
+    }
+}
+
+; @summary One row per step (containers are not rows; they show in the Inside column), in step order. Each row is a Map
+;          Key -> text (see V27_Columns) and also has .Node = the step's node, so the grid can find the step.
+;          The "#" is the same number the tree shows. state = Map with LastNotes (number -> note), Shaky (number -> 1),
+;          Open (program exe -> 1 for running programs), HasRun, History.
+; @returns array of row Maps
+; @tags grid, cells, v27
+V27_Rows(blocks, settings, state) {
+    items := [], chains := Map()
+    V27_Walk(blocks, [], items, chains)
+    apps := V22_FillApps(items, settings)
+    openExes := state.Get("Open", Map())
+    V24_MarkApps(apps.App, openExes, items)
+    rows := [], carry := Map()
+    for i, node in items {
+        if VMF_IsContainer(node)
+            continue
+        app := apps.App.Get(node, "")
+        own := V27_OwnSize(node)
+        if own != ""
+            carry[app] := own
+        ctx := Map("Num", i, "App", app, "Inside", V27_InsideText(chains[node]),
+            "LastNote", state.Get("LastNotes", Map()).Get(i, ""), "HasRun", state.Get("HasRun", false),
+            "Shaky", state.Get("Shaky", Map()).Has(i), "History", state.Get("History", false),
+            "Size", own != "" ? own : carry.Get(app, ""), "Settings", settings)
+        row := V27_Cells(node, ctx)
+        row.Node := node
+        rows.Push(row)
+    }
+    return rows
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -16565,6 +16872,86 @@ V4_SelfTest(path) {
         check("V25 marks: not shaky adds nothing", V22_Marks(Map("type", "click")), "")
         check("V25 mark characters: symbol and plain", V22_MarkChars(0)["shaky"] . V22_MarkChars(1)["shaky"], "≈~")
         DirDelete(v25Dir, true)
+        ; V27 item A: cell data of the step grid
+        v27S := Map("steady", 1, "verifyClicks", 1)
+        v27Ctx := Map("Num", 7, "App", "notepad", "HasRun", true, "History", true, "Shaky", false, "Settings", v27S)
+        v27Q := Chr(34)
+        v27Cols := V27_Columns()
+        v27Keys := Map()
+        for col in v27Cols
+            v27Keys[col.Key] := 1
+        check("V27 columns: 22 columns, every key different", v27Cols.Length . "/" . v27Keys.Count, "22/22")
+        v27Click := Map("type", "click", "button", "Left", "count", 1, "scrX", 300, "scrY", 200,
+            "win", Map("exe", "notepad.exe", "cls", "Notepad", "title", "x"), "what", Map("kind", "button", "text", "OK"))
+        v27C := V27_Cells(v27Click, v27Ctx)
+        check("V27 click: number", String(v27C["num"]), "7")
+        check("V27 click: program", v27C["app"], "notepad")
+        check("V27 click: window is its class", v27C["window"], "Notepad")
+        check("V27 click: no size is a dash", v27C["winsize"], "–")
+        check("V27 click: action", v27C["action"], "Click")
+        check("V27 click: on what", v27C["target"], "the " . v27Q . "OK" . v27Q . " button")
+        check("V27 click: button, clicks, held", v27C["button"] . " " . v27C["clicks"] . " " . v27C["held"], "Left 1 none")
+        check("V27 click: spot without a window size", v27C["x"] . "," . v27C["y"] . " " . v27C["anchor"], "300,200 screen spot")
+        check("V27 click: no wait, no scroll, no picture check", v27C["wait"] . " " . v27C["scroll"] . " " . v27C["check"], "0 no no")
+        check("V27 click: last run ok, history says no, on", v27C["lastrun"] . " " . v27C["shaky"] . " " . v27C["onoff"], "ok no on")
+        check("V27 click: every cell filled in", v27C["inside"] . v27C["zone"] . v27C["note"], "–––")
+        v27Geo := Map("cx", 150, "cy", 100, "cw", 400, "ch", 300, "ww", 700, "wh", 500, "ax", "R", "ay", "B", "max", 0)
+        v27D := V27_Cells(Map("type", "click", "button", "Left", "count", 2, "mods", "^+", "geo", v27Geo), v27Ctx)
+        check("V27 double-click: action", v27D["action"], "Double-click")
+        check("V27 double-click: held keys", v27D["held"], "Ctrl+Shift")
+        check("V27 double-click: window size from the spot", v27D["winsize"], "700 × 500")
+        check("V27 double-click: where and follows", v27D["zone"] . " / " . v27D["anchor"], "middle / bottom-right")
+        check("V27 right-click: action", V27_Cells(Map("type", "click", "button", "Right", "count", 1), v27Ctx)["action"], "Right-click")
+        v27T := V27_Cells(Map("type", "text", "text", "hello"), v27Ctx)
+        check("V27 typed text: action", v27T["action"], "Type")
+        check("V27 typed text: in quotes", v27T["text"], v27Q . "hello" . v27Q)
+        check("V27 typed text: no mouse cells", v27T["button"], "–")
+        v27A := V27_Cells(Map("type", "text", "text", "secret password", "ask", 1), v27Ctx)
+        check("V27 ask-each-run text: never shows the text", InStr(v27A["text"], "secret") > 0, false)
+        check("V27 ask-each-run text: says it asks", v27A["text"], "(asks each run)")
+        v27K := V27_Cells(Map("type", "keys", "keys", "{Tab}"), v27Ctx)
+        check("V27 keys: action", v27K["action"], "Press")
+        check("V27 keys: text is not a dash", v27K["text"] != "–", true)
+        v27W := V27_Cells(Map("type", "wheel", "direction", "WheelDown", "count", 3), v27Ctx)
+        check("V27 wheel: action and text", v27W["action"] . " " . v27W["text"], "Scroll down × 3")
+        v27N := V27_Cells(Map("type", "det_normalize_win", "target", "ahk_class Notepad ahk_exe notepad.exe", "width", 800, "height", 600, "maximize", 0), v27Ctx)
+        check("V27 normalize: window size", v27N["winsize"], "800 × 600")
+        check("V27 normalize: window class from the target", v27N["window"], "Notepad")
+        check("V27 normalize: action", v27N["action"], "Window")
+        check("V27 wait text: a set delay", V27_Cells(Map("type", "click", "button", "Left", "count", 1, "delayMs", 500), v27Ctx)["wait"], "500 ms*")
+        check("V27 disabled step is off", V27_Cells(Map("type", "text", "text", "x", "disabled", 1), v27Ctx)["onoff"], "off")
+        check("V27 window kind: dialog", V27_WindowText(Map("type", "click", "win", Map("cls", "#32770"))), "dialog")
+        check("V27 window kind: main window", V27_WindowText(Map("type", "click", "win", Map("cls", "AutoHotkeyGUI"))), "main window")
+        check("V27 window kind: maximized size", V27_OwnSize(Map("type", "click", "geo", Map("max", 1))), "maximized")
+        check("V27 inside: top level is a dash", V27_InsideText([]), "–")
+        check("V27 inside: the chain", V27_InsideText(["Repeat 5 times", "If amount is 250"]), "Repeat 5 times › If amount is 250")
+        check("V27 anchor: bottom-right", V27_Cells(Map("type", "click", "button", "Left", "count", 1, "geo", v27Geo), v27Ctx)["anchor"], "bottom-right")
+        check("V27 last run: never run", V27_LastRunText(Map("HasRun", false)), "not run yet")
+        check("V27 last run: note without the step number", V27_LastRunText(Map("HasRun", true, "LastNote", "Step #5: Could not click.")), "Could not click.")
+        check("V27 last run: ran with no note", V27_LastRunText(Map("HasRun", true)), "ok")
+        check("V27 shaky: no history", V27_ShakyText(Map()), "no history")
+        check("V27 shaky: yes", V27_ShakyText(Map("History", true, "Shaky", true)), "yes")
+        check("V27 scroll: row = position + 1", V27_ScrollText(Map("v", 149), true), "row 150")
+        check("V27 scroll: column too", V27_ScrollText(Map("v", 149, "h", 4), true), "row 150, col 5")
+        check("V27 scroll: mouse step without one = no", V27_ScrollText("", true), "no")
+        check("V27 held keys: none, Ctrl+Shift, Shift", V27_HeldText("") . " " . V27_HeldText("^+") . " " . V27_HeldText("+"), "none Ctrl+Shift Shift")
+        check("V27 checks picture: steady with a picture = yes", V27_CheckText(Map("type", "click", "pattern", "abc"), v27S), "yes")
+        check("V27 checks picture: not steady = no", V27_CheckText(Map("type", "click", "pattern", "abc"), Map("steady", 0, "verifyClicks", 1)), "no")
+        check("V27 checks picture: noVerify = no", V27_CheckText(Map("type", "click", "pattern", "abc", "noVerify", 1), v27S), "no")
+        v27Blocks := [Map("type", "repeat", "count", 5, "body", [Map("type", "click", "button", "Left", "count", 1, "scrX", 10, "scrY", 20), Map("type", "text", "text", "hi")]),
+            Map("type", "keys", "keys", "{Enter}")]
+        v27Rows := V27_Rows(v27Blocks, v27S, Map("Open", Map("notepad.exe", 1)))
+        check("V27 rows: one row per step, no container row", v27Rows.Length, 3)
+        check("V27 rows: nested step is inside the repeat", v27Rows[1]["inside"], "Repeat 5 times")
+        check("V27 rows: top-level step is not inside", v27Rows[3]["inside"], "–")
+        check("V27 rows: numbers match the tree (the click is #2)", String(v27Rows[1]["num"]), "2")
+        check("V27 rows: each row keeps its node", v27Rows[1].Node["type"], "click")
+        v27Empty := 0
+        for row in v27Rows
+            for col in v27Cols
+                if row.Get(col.Key, "") = ""
+                    v27Empty += 1
+        check("V27 rows: no empty cell", v27Empty, 0)
         ; V27 check this PC (scroll test in a helper program)
         check("V27 helper: has a list box and a multi-line text box", InStr(V27_ScrollHelperText(), "ListBox") > 0 && InStr(V27_ScrollHelperText(), "Multi") > 0, true)
         check("V27 helper: 300 rows and 300 lines", InStr(V27_ScrollHelperText(), "loop 300") > 0, true)
