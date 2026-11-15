@@ -14339,8 +14339,9 @@ V20_CaptureWhat(x, y) {
             return V20_What("menu item", text)
         }
         hit := 0
-        try hit := SendMessage(0x84, 0, (y << 16) | (x & 0xFFFF), root, , , , , 200)          ; WM_NCHITTEST
+        try hit := SendMessage(0x84, 0, ((y & 0xFFFF) << 16) | (x & 0xFFFF), root, , , , , 200)          ; WM_NCHITTEST (V34: y masked to 16 bits like x)
         part := V20_FramePart(hit)
+        part := V34_CaptionFallback(root, x, y, hit, part)       ; V34: Windows 11 draws the caption buttons itself
         if part = "menu bar" {
             text := ""
             try text := V20_MenuText(root, DllCall("GetMenu", "Ptr", root, "Ptr"), x, y)
@@ -14379,7 +14380,7 @@ V20_WhatText(node) {
         return (kind = "menu item" || kind = "menu") ? kind . ' "' . text . '"' : 'the "' . text . '"' . (kind != "" ? " " . kind : "")
     if kind = ""
         return ""
-    if RegExMatch(kind, "i)^(title bar|menu bar|taskbar|status bar|toolbar|tab strip|window edge|scroll bar|Close|Minimize|Maximize|Help|window menu)")
+    if RegExMatch(kind, "i)^(title bar|menu bar|taskbar|status bar|toolbar|tab strip|window edge|scroll bar|Close|Minimize|Maximize|Restore|Help|window menu)")
         return "the " . kind
     return (RegExMatch(kind, "i)^[aeiou]") ? "an " : "a ") . kind
 }
@@ -24427,6 +24428,49 @@ V34_Later(work, guard := 0) {
     SetTimer(later, -1)
 }
 
+; ---- V34 finding 4: caption buttons named right ------------------------------------------------------------------------
+
+; @summary Which caption button a point is over, from the strip the buttons sit in: Minimize / Maximize (or Restore when the
+;          window is maximized) / Close, right-aligned, equal width. A window with neither minimize nor maximize box shows
+;          only Close. Returns "" when the point is outside the strip horizontally.
+; @tags macro, explain, record, v34
+V34_CaptionPart(px, stripLeft, stripRight, hasMinMax, maximized) {
+    if px < stripLeft || px >= stripRight || stripRight <= stripLeft
+        return ""
+    if !hasMinMax
+        return "Close button (X)"
+    third := Min(2, Integer((px - stripLeft) * 3 // (stripRight - stripLeft)))
+    return third = 0 ? "Minimize button" : third = 1 ? (maximized ? "Restore button" : "Maximize button") : "Close button (X)"
+}
+
+; @summary True when a WM_NCHITTEST code could be one of the caption buttons (title bar, Minimize, Maximize, Close): on Windows 11
+;          the code is often wrong (HTCAPTION for Maximize), so the strip decides.
+; @tags macro, explain, record, v34
+V34_HitIsCaptionish(hit) => hit = 2 || hit = 8 || hit = 9 || hit = 20
+
+; @summary The name of the caption button under a screen point, or the old name when the point is not in the buttons' strip
+;          (DwmGetWindowAttribute DWMWA_CAPTION_BUTTON_BOUNDS = 5, window-relative). Never throws.
+; @tags macro, explain, record, v34
+V34_CaptionFallback(root, x, y, hit, part) {
+    if !V34_HitIsCaptionish(hit)
+        return part
+    try {
+        rc := Buffer(16, 0)
+        if DllCall("dwmapi\DwmGetWindowAttribute", "Ptr", root, "UInt", 5, "Ptr", rc, "UInt", 16, "Int") != 0
+            return part
+        WinGetPos(&wx, &wy, , , "ahk_id " . root)
+        left := wx + NumGet(rc, 0, "Int"), top := wy + NumGet(rc, 4, "Int")
+        right := wx + NumGet(rc, 8, "Int"), bottom := wy + NumGet(rc, 12, "Int")
+        if !V34_InRect(x, y, left, top, right, bottom)
+            return part
+        style := WinGetStyle("ahk_id " . root)
+        hasBox := (style & 0x20000) || (style & 0x10000)            ; WS_MINIMIZEBOX / WS_MAXIMIZEBOX
+        name := V34_CaptionPart(x, left, right, hasBox ? true : false, WinGetMinMax("ahk_id " . root) = 1)
+        return name != "" ? name : part
+    }
+    return part
+}
+
 ; ==== V34 END (new V34 functions are added above this line)
 
 ; ============================================================================
@@ -26611,6 +26655,18 @@ V4_SelfTest(path) {
         V34_Later(() => v34N += 10, () => false)
         Sleep(60)
         check("V34 later: a guard that says no skips it", v34N, 1)
+        ; V34 finding 4: caption buttons (strip 1000..1138, three 46 px buttons)
+        check("V34 caption: left third is Minimize", V34_CaptionPart(1010, 1000, 1138, true, false), "Minimize button")
+        check("V34 caption: middle third is Maximize", V34_CaptionPart(1069, 1000, 1138, true, false), "Maximize button")
+        check("V34 caption: middle third of a maximized window is Restore", V34_CaptionPart(1069, 1000, 1138, true, true), "Restore button")
+        check("V34 caption: right third is Close", V34_CaptionPart(1137, 1000, 1138, true, false) . "|" . V34_CaptionPart(1130, 1000, 1138, true, false), "Close button (X)|Close button (X)")
+        check("V34 caption: edges of the thirds", V34_CaptionPart(1045, 1000, 1138, true, false) . "|" . V34_CaptionPart(1046, 1000, 1138, true, false), "Minimize button|Maximize button")
+        check("V34 caption: outside the strip is empty", V34_CaptionPart(999, 1000, 1138, true, false) . V34_CaptionPart(1138, 1000, 1138, true, false), "")
+        check("V34 caption: no min / max box = Close only", V34_CaptionPart(1010, 1000, 1046, false, false), "Close button (X)")
+        check("V34 caption: only caption-like hit codes use the strip", V34_HitIsCaptionish(2) . V34_HitIsCaptionish(8) . V34_HitIsCaptionish(20) . V34_HitIsCaptionish(1) . V34_HitIsCaptionish(5), "11" . "1" . "0" . "0")
+        check("V34 caption: an unknown window keeps the old name", V34_CaptionFallback(0, 10, 10, 2, "title bar"), "title bar")
+        check("V34 caption: a body hit keeps its name", V34_CaptionFallback(0, 10, 10, 1, ""), "")
+        check("V34 caption: Restore reads as a button name", V20_WhatText(Map("what", Map("kind", "Restore button"))), "the Restore button")
         check("V34 steady runner: a settle wait is only for steady input steps", V34_FloorMs(V18_Steady(V4Runner(VMF_NewMacro(), {})), VMF_NewMacro()["settings"]), 120)
     } catch as err {
         failures += 1
