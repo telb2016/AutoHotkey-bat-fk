@@ -4,6 +4,13 @@ You are testing a program on a real Windows PC because the people who built it o
 run the checks below, write down exactly what happened, and hand back one results file. You are a tester, not a
 developer: **do not change the script.** If something fails, record it and go on.
 
+
+## Retest after V34.1 (one item, added after the V34 retest)
+- **Emergency exit.** Reproduce the earlier failure: open a saved test macro, change a cell, close the editor with X,
+  wait 2.5 s, press Ctrl+Shift+X. Report how many seconds until the process is gone (expected: under 1 s), 5 tries.
+  Also try it once while a macro is playing and once while recording. Turn **Auto-save** off for the unsaved-changes
+  retest (with it on, the title shows "(saved hh:mm:ss)" and no `*`, which is correct).
+
 ## Retest after V34 (do these first, then the rest; same folder and safety rules as below)
 The first PC test found 8 problems; V34 changes the program for them. Please report:
 1. **Part 2 steps 5-10, with TEN replays** (not three): after recording, play the macro ten times, clearing Notepad's text

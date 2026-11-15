@@ -1,4 +1,5 @@
 ; VisualMacroBlocks-makecode-telek-V34
+; V34.1 = Ctrl+Shift+X (emergency exit) ends the process directly, without waiting for the normal exit work.
 ; V34 = V33 + fixes from the first PC test: steadier replay (settle floor, explicit key / double-click presses), header menu at the right place,
 ;       Ready to play? in Easy mode, fast Enter in a cell, caption button names, unsaved changes restored after a restart. See V34-NOTES.md.
 ; V33 = V32 + more Excel: select a block of cells (Shift+arrows, Shift+click, Ctrl+Shift+arrows, Ctrl+A) with a summary in the status bar,
@@ -3759,8 +3760,18 @@ VMB_ExitApp() {
 ; @summary Ctrl+Shift+X: stop everything and exit immediately.
 ; @tags macro, hotkey, safety
 VMB_PanicExit() {
+    ; V34.1: the emergency exit must end the script no matter what. On the PC it once left the process alive for 10 s
+    ; (after the editor was closed with X); ExitApp runs the normal exit work first and can wait on it. So: stop
+    ; playing / recording, let go of held keys, remove the picture cache, then end the process directly.
     VM_RequestStop()
     try VM_RecordStop()
+    try VM_ReleaseStuckModifiers()
+    try {
+        cache := A_Temp . "\VisualMacroBlocks-V4-" . DllCall("GetCurrentProcessId")
+        if DirExist(cache)
+            DirDelete(cache, true)
+    }
+    DllCall("TerminateProcess", "Ptr", DllCall("GetCurrentProcess", "Ptr"), "UInt", 2)
     ExitApp(2)
 }
 
