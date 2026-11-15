@@ -224,7 +224,10 @@ Tab::V29_TabKey(1)
 ^-::V29_ZoomKey(-1)
 ^NumpadSub::V29_ZoomKey(-1)
 ^0::V29_ZoomKey(0)
-^c::V27_CopyRow()
+^c::V29_CopyCell()
+^+c::V27_CopyRow()
+^v::V29_PasteCell()
+^x::V29_CutCell()
 F2::V28_OpenCurrent()
 Delete::V28_DeleteCell()
 ^d::V28_CopyAbove()
@@ -17545,6 +17548,88 @@ V29_TabKey(step) {
     V29_GoCol(next)
 }
 
+; ----------------------------------------------------------------------------
+; V29 item C: copy / paste a cell, like Excel (Ctrl+C = the cell, Shift+Ctrl+C = the row, Ctrl+V pastes, Ctrl+X cuts)
+; ----------------------------------------------------------------------------
+
+; @summary The text Ctrl+C puts on the clipboard for one cell. A cell that can be edited gives the same text the editor opens with
+;          (so a copied wait pastes back exactly); any other cell gives what the grid shows. Tabs and line breaks become a space.
+; @returns String
+; @tags grid, copy, v29
+V29_CopyText(node, key, shown) {
+    text := IsObject(node) && V28_Editable(node, key) != "" ? V28_EditText(node, key) : shown
+    return V27_TsvCell(text)
+}
+
+; @summary The part of the clipboard that is pasted into one cell: the first line, and of that the first tab-separated field
+;          (what Excel gives for a block of cells). Nothing on the clipboard gives "".
+; @returns String
+; @tags grid, paste, v29
+V29_PasteText(clip) {
+    lines := StrSplit(String(clip), ["`r", "`n"])
+    fields := lines.Length ? StrSplit(lines[1], "`t") : []
+    return fields.Length ? fields[1] : ""
+}
+
+; @summary The grid's current cell: {Row, Col, Node, Key, Title}, or 0 when no row is selected.
+; @tags grid, cursor, v29
+V29_Current() {
+    s := VMB()
+    row := s.GridLV ? s.GridLV.GetNext(0) : 0
+    node := row ? s.GridNodes.Get(row, 0) : 0
+    cols := V27_Columns()
+    if !IsObject(node) || s.GridCol < 1 || s.GridCol > cols.Length
+        return 0
+    return {Row: row, Col: s.GridCol, Node: node, Key: cols[s.GridCol].Key, Title: cols[s.GridCol].Title}
+}
+
+; @summary Ctrl+C in the grid: copies the current cell's text.
+; @tags grid, copy, hotkey, v29
+V29_CopyCell() {
+    cur := V29_Current()
+    if !cur
+        return
+    text := V29_CopyText(cur.Node, cur.Key, VMB().GridLV.GetText(cur.Row, cur.Col))
+    A_Clipboard := text
+    VMB_Status("Copied " . cur.Title . ": " . (StrLen(text) > 60 ? SubStr(text, 1, 57) . "..." : text) . "   Ctrl+V pastes it into a cell (here or in Excel). Shift+Ctrl+C copies the whole row.")
+}
+
+; @summary Ctrl+V in the grid: pastes the first line / first tab field of the clipboard into the current cell, with the same rules
+;          as typing it (V28_Plan): a value that does not fit is refused and the status bar says why. One Ctrl+Z undoes it.
+; @tags grid, paste, hotkey, v29
+V29_PasteCell() {
+    cur := V29_Current()
+    if !cur
+        return
+    if V28_Editable(cur.Node, cur.Key) = ""
+        return VMB_Status("Cannot paste into " . cur.Title . ". " . V28_NotEditableText())
+    clip := A_Clipboard
+    if clip = ""
+        return VMB_Status("The clipboard has no text to paste.")
+    text := V29_PasteText(clip)
+    plan := V28_Plan(cur.Node, cur.Key, text)
+    if !plan.Ok
+        return VMB_Status("Not pasted into " . cur.Title . ": " . plan.Error)
+    if V28_SameText(text, V28_EditText(cur.Node, cur.Key))
+        return VMB_Status(cur.Title . " already has that.")
+    V28_Do(cur.Node, plan, "Pasted into " . cur.Title . ". Ctrl+Z undoes it.")
+}
+
+; @summary Ctrl+X in the grid: copies the cell, then clears it - only for the cells Delete can clear (Note, Waits first).
+;          Any other cell is not touched and the status bar says so.
+; @tags grid, copy, hotkey, v29
+V29_CutCell() {
+    cur := V29_Current()
+    if !cur
+        return
+    if cur.Key != "note" && cur.Key != "wait"
+        return VMB_Status("Cut works only on a Note or a Waits first cell (the cells Delete can clear). Ctrl+C copies this one.")
+    if !cur.Node.Has(cur.Key = "note" ? "note" : "delayMs")
+        return VMB_Status(cur.Title . " is already empty, nothing to cut.")
+    A_Clipboard := V29_CopyText(cur.Node, cur.Key, "")
+    V28_DeleteCell()
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -18964,6 +19049,15 @@ V4_SelfTest(path) {
         check("V29 next col: stays at the edges", V29_NextCol([1, 3, 2, 4], 4, 1) . "," . V29_NextCol([1, 3, 2, 4], 1, -1), "4,1")
         check("V29 next col: a column that is not shown goes to the first / last shown", V29_NextCol([2, 5, 7], 3, 1) . "," . V29_NextCol([2, 5, 7], 3, -1), "2,7")
         check("V29 next col: empty order and one column", V29_NextCol([], 4, 1) . "," . V29_NextCol([6], 6, 1) . "," . V29_NextCol([6], 6, -1), "4,6,6")
+        ; V29 item C: copy / paste a cell
+        v29W := Map("type", "keys", "keys", "a", "delayMs", 2000)
+        check("V29 copy text: an editable cell gives the editor's text, a worked-out cell gives what is shown", V29_CopyText(v29W, "wait", "2 s*") . "|" . V29_CopyText(v29W, "app", "notepad?") . "|" . V29_CopyText(Map("type", "keys", "keys", "a"), "wait", "0"), "2 s|notepad?|auto")
+        check("V29 copy text: a tab or line break inside a cell becomes a space", V29_CopyText(Map("type", "text", "text", "a`tb`r`nc"), "text", ""), "a b c")
+        check("V29 paste text: first line, first tab field", V29_PasteText("3`t4`r`n5`t6") . "|" . V29_PasteText("hello") . "|" . V29_PasteText("") . "|" . V29_PasteText("`t7") . "|" . V29_PasteText("x`ny"), "3|hello|||x")
+        v29To := Map("type", "text", "text", "zzz")
+        check("V29 paste: a copied wait pastes into another step", V28_ApplyCell(v29To, "wait", V29_PasteText(V29_CopyText(v29W, "wait", "2 s*"))).Ok . v29To["delayMs"], "12000")
+        check("V29 paste: a value that does not fit is refused, step unchanged", V28_ApplyCell(v29To, "wait", V29_PasteText("tomorrow")).Ok . v29To["delayMs"], "02000")
+        check("V29 paste / copy / cut do nothing without a grid", V29_CopyCell() . V29_PasteCell() . V29_CutCell() . V29_Current(), "0")
         check("V29 name box text", V29_NameText("Waits first", 7) . "|" . V29_NameText("", 3) . "|" . V29_NameText("Note", ""), "Waits first · step 7|–|–")
         check("V29 cursor: redraw and rectangle work without a grid", V29_CursorRedraw(), "")
         check("V29 visible order without a grid is every column in order", V29_VisibleOrder().Length, V27_Columns().Length)
