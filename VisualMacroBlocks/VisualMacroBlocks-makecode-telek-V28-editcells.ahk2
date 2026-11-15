@@ -212,6 +212,8 @@ Esc::V28_EscKey()
 #HotIf V27_GridFocused()
 ^c::V27_CopyRow()
 F2::V28_OpenCurrent()
+Delete::V28_DeleteCell()
+^d::V28_CopyAbove()
 Enter::V28_OpenCurrent()
 NumpadEnter::V28_OpenCurrent()
 Left::V28_MoveCol(-1)
@@ -16707,7 +16709,7 @@ V28_ApplyCell(node, key, input) {
 ; ----------------------------------------------------------------------------
 
 ; @summary Creates the cell editor once: a hidden Edit (s.CellEdit) and a hidden DropDownList (s.CellPick), and hooks the grid
-;          (click = current cell, scroll / column resize = close the editor).
+;          (click = current cell, scroll / column resize = close the editor, key down = typing starts an edit).
 ;          Both controls are NOT in s.Ctl, so the Easy / Full layout code does not know them.
 ; @tags grid, edit, gui, v28
 V28_Build(g) {
@@ -16721,6 +16723,8 @@ V28_Build(g) {
     s.GridLV.OnEvent("Click", V28_OnClick)
     for code in [-181, -326, -327, -325, -321]                 ; LVN_ENDSCROLL, header: begin / end / double-click / changed
         s.GridLV.OnNotify(code, V28_OnScrollOrResize)
+    OnMessage(0x100, V28_OnWmKeyDown)                          ; WM_KEYDOWN to the grid: typing a letter starts an edit (LVN_KEYDOWN is not passed on by AutoHotkey)
+    OnMessage(0x20A, V28_OnWmWheel)                            ; WM_MOUSEWHEEL: the grid scrolls, so the editor closes
 }
 
 ; @summary The cell rectangle of a grid cell in the grid's own client pixels: {L, T, R, B}, or 0 when the cell is not shown.
@@ -17067,6 +17071,88 @@ V28_OnScrollOrResize(*) {
     s := VMB()
     if s.CellOn
         V28_Finish()
+}
+
+; ----------------------------------------------------------------------------
+; V28 item C: small Excel habits (Delete clears, Ctrl+D copies the cell above, typing starts an edit)
+; ----------------------------------------------------------------------------
+
+; @summary Delete in the grid: a Note cell loses its note, a Waits cell goes back to automatic. Other cells: the status bar says so.
+; @tags grid, edit, gui, v28
+V28_DeleteCell() {
+    s := VMB()
+    row := s.GridLV.GetNext(0)
+    node := row ? s.GridNodes.Get(row, 0) : 0
+    if !IsObject(node)
+        return
+    col := V27_Columns()[s.GridCol]
+    if col.Key != "note" && col.Key != "wait"
+        return VMB_Status("Delete clears only a Note or a Waits first cell. To delete the step, use the Delete button or the right-click menu.")
+    if !node.Has(col.Key = "note" ? "note" : "delayMs")
+        return VMB_Status(col.Title . " is already empty.")
+    V28_Do(node, V28_Plan(node, col.Key, ""), col.Title . " cleared. Ctrl+Z undoes it.")
+}
+
+; @summary Ctrl+D in the grid: copies the value of the cell above (in the order shown) into the current cell, when both steps have
+;          that column editable and the value is valid for this step.
+; @tags grid, edit, gui, v28
+V28_CopyAbove() {
+    s := VMB()
+    row := s.GridLV.GetNext(0)
+    node := row ? s.GridNodes.Get(row, 0) : 0
+    if !IsObject(node)
+        return
+    if row < 2
+        return VMB_Status("There is no row above to copy from.")
+    col := V27_Columns()[s.GridCol]
+    above := s.GridNodes.Get(row - 1, 0)
+    if !IsObject(above) || V28_Editable(above, col.Key) = "" || V28_Editable(node, col.Key) = ""
+        return VMB_Status("Copy from above works when both cells are editable: " . col.Title . " is not for one of these two steps.")
+    plan := V28_Plan(node, col.Key, V28_EditText(above, col.Key))
+    if !plan.Ok
+        return VMB_Status("The cell above does not fit this step: " . plan.Error)
+    if V28_EditText(above, col.Key) = V28_EditText(node, col.Key)
+        return VMB_Status("The cell is already the same as the one above.")
+    V28_Do(node, plan, col.Title . " copied from the row above. Ctrl+Z undoes it.")
+}
+
+; @summary WM_KEYDOWN monitor: a key pressed while the grid has the focus. Returns nothing, so the key is handled as usual.
+; @tags grid, edit, gui, v28
+V28_OnWmKeyDown(wParam, lParam, msg, hwnd) {
+    s := VMB()
+    if s.GridLV && hwnd = s.GridLV.Hwnd
+        V28_TypeKey(wParam)
+}
+
+; @summary WM_MOUSEWHEEL monitor: the grid (or the editor) is scrolled by the wheel, so the editor closes (a valid value is saved).
+; @tags grid, edit, gui, v28
+V28_OnWmWheel(wParam, lParam, msg, hwnd) {
+    s := VMB()
+    if s.CellOn && (hwnd = s.GridLV.Hwnd || hwnd = s.CellEdit.Hwnd || hwnd = s.CellPick.Hwnd)
+        V28_Finish()
+}
+
+; @summary A letter or digit key (virtual key code) went down in the grid: starts editing the current cell with that character,
+;          when the cell is editable. Not with Ctrl or Alt held, not while recording / playing, not when the editor is already open.
+; @tags grid, edit, gui, v28
+V28_TypeKey(vk) {
+    s := VMB()
+    if s.CellOn || !s.GridLV || s.View != "grid" || VM_IsRecording() || VM_IsPlaying() || GetKeyState("Ctrl") || GetKeyState("Alt")
+        return
+    shifted := GetKeyState("Shift")
+    if vk >= 0x41 && vk <= 0x5A
+        ch := (shifted != GetKeyState("CapsLock", "T")) ? Chr(vk) : StrLower(Chr(vk))
+    else if vk >= 0x30 && vk <= 0x39 && !shifted
+        ch := Chr(vk)
+    else if vk >= 0x60 && vk <= 0x69
+        ch := Chr(vk - 0x30)
+    else
+        return
+    row := s.GridLV.GetNext(0)
+    node := row ? s.GridNodes.Get(row, 0) : 0
+    if !IsObject(node) || V28_Editable(node, V27_Columns()[s.GridCol].Key) = ""
+        return                                                 ; not editable: the list keeps its own type-to-search
+    V28_Open(row, s.GridCol, ch)
 }
 
 ; ============================================================================
@@ -18453,6 +18539,16 @@ V4_SelfTest(path) {
         check("V28 editor: not focused (and so no Enter / Tab / Esc hotkey) when it is not open", V28_EditorFocused(), false)
         check("V28 editor: its controls are not in the Easy / Full layout list", VMB().Ctl.Has("CellEdit") || VMB().Ctl.Has("CellPick"), false)
         check("V28 editor: closing a closed editor does nothing", V28_Cancel() . V28_Finish() . VMB().CellOn, "0")
+        ; V28 item C: Delete clears, Ctrl+D copies the cell above (the pure parts: an empty value, and the value of another step)
+        v28N := Map("type", "keys", "keys", "a", "note", "x", "delayMs", 900)
+        V28_ApplyCell(v28N, "note", ""), V28_ApplyCell(v28N, "wait", "")
+        check("V28 delete: an empty Note cell removes the note, an empty Waits cell goes back to automatic", v28N.Has("note") . v28N.Has("delayMs"), "00")
+        v28Above := Map("type", "text", "text", "abc", "delayMs", 2500), v28Below := Map("type", "text", "text", "zzz")
+        check("V28 copy above: the wait of the step above is valid for this step", V28_ApplyCell(v28Below, "wait", V28_EditText(v28Above, "wait")).Ok . v28Below["delayMs"], "12500")
+        check("V28 copy above: a raw-keys cell is valid for another Press step", V28_ApplyCell(v28N, "text", V28_EditText(Map("type", "keys", "keys", "^{c}"), "text")).Ok . v28N["keys"], "1^{c}")
+        v28Far := Map("type", "click", "scrX", 5, "scrY", 6, "geo", Map("cx", 10, "cy", 10, "cw", 100, "ch", 100))
+        check("V28 copy above: a value outside this step's window is refused, step unchanged", V28_ApplyCell(v28Far, "x", "250").Ok . v28Far["geo"]["cx"], "010")
+        check("V28 typed key: no editor open, so nothing to close", V28_TypeKey(65) . VMB().CellOn, "0")
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
