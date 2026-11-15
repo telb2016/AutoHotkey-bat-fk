@@ -1,4 +1,4 @@
-# PC test - one sheet for V19 to V30
+# PC test - one sheet for V19 to V31
 
 File: `VisualMacroBlocks-makecode-telek-V26-pccheck.ahk2`. This replaces the separate V21 / V22 / V23 / V24 / V25 checklists
 (those files stay in the folder, but you do not need them). Nothing here was ever run on a real Windows PC yet.
@@ -74,3 +74,16 @@ Use a real program with a form (for example a web form or an app with two text b
 8. On the List tab double-click a cell, type, press Enter / Tab / Esc; Ctrl+Z undoes it; click a column name to rename it (Type steps that used the old name follow). Right-click the Text cell of a Type step: the menu offers *Use list column*, *Type fixed text...*.
 9. Open an old macro (no List): nothing looks different; the Run line says **once**. A macro with its own Repeat / For each blocks shows the note *This macro has its own loop blocks (see List view)* instead of the choices. Easy mode shows the Run line and the tabs too.
 10. Look at the **Repeats** column (to the right of Waits first): the first window steps say *once at start*, the rest *yes*. Try setting step 5 to *once at start* while step 4 says *yes*: a sentence refuses it.
+
+## 7. Rules (V31 file: `VisualMacroBlocks-makecode-telek-V31-onlywhen.ahk2`)
+
+Use Notepad. Make a list with the columns `Name`, `Status`, `Amount` and four rows: `Anna On 150`, `Bob Off 500`, `Cy On 20`, `Di On 100`. Steps: Use Window (Notepad), then a Type step `=Name`, a Type step ` big`, a Type step ` small`, a Press `{Enter}` step. Choose **for each row of the List**.
+
+1. Click the **Only when** cell of the ` big` step (it says `always`), press **F2**, type `Amount > 100`, Enter. Do the same on the ` small` step with `otherwise`. The two cells get a thin coloured bar at the left (same colour = one chain).
+2. Right-click a Type step -> **Add step** -> **Skip this row**. A row `Skip this row` appears below it. Move it up to the first step after Use Window (or add it there) and give it the rule `Status = Off`. Play. Notepad must read exactly: `Anna big` / `Cy small` / `Di small` (Bob is absent). The status bar says `4 rows: 4 done.`
+3. Change **Preview row** to 2, then 3: steps that would be left out for that row turn grey and their Only when cell says `skipped for row N`.
+4. Type a rule with a name that does not exist (`Colour = red`): a sentence refuses it and says which names you can use. Type `otherwise` on the first step: a sentence says it needs a step with a rule right above it.
+5. Right-click an Only when cell -> **Build a rule...**: pick a name, a comparison and type a value; OK puts the rule in the cell. Ctrl+Z undoes it.
+6. Add **Add step -> Wait until window...**, double-click its Text cell and type `Save As is open within 5 s`. Play with no such window open: the run stops after 5 s with a sentence. Set its **If it fails** cell to `try 3 times, then stop`; open the window during the tries: the run goes on. The other choices (`skip this step`, `skip this row`, `stop`, `ask me`) do what they say.
+7. Make three rows in a row fail (for example give a step a window that is not there with `skip this row`): the run stops after the third with `3 rows in a row could not be done - stopped so the rest are not skipped too.`
+8. Open an old macro: the two new columns show `always` and `macro setting`, nothing is greyed, and it plays as before. In **Easy** mode the Blocks toolbox on the left is plain black on white; right-click the step list -> **Coloured rows** brings the colours back in the list and the toolbox.

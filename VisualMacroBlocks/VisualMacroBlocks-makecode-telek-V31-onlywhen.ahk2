@@ -1,3 +1,6 @@
+; VisualMacroBlocks-makecode-telek-V31
+; V31 = V30 + rules as columns instead of programming blocks: "Only when" (if / otherwise), "If it fails" (stop / skip / try 3 times),
+;       Skip this row / Stop the run / Wait until window steps, an "Add step" menu, a plain Blocks toolbox, and a stop after 3 bad rows in a row.
 ; VisualMacroBlocks-makecode-telek-V30
 ; V30 = V29 + loops without loop blocks: a List sheet (paste your items from Excel), =Column cells in Type steps, and one switch
 ;       "Run: once / for each row of the List / N times". The loop is built in memory at Play; the saved macro never gets loop blocks.
@@ -348,7 +351,7 @@ VMB_Main() {
 VMB_BuildGui() {
     s := VMB()
     s.Easy := Integer(IniRead(s.Ini, "V17", "EasyMode", 1)) ? 1 : 0
-    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V30")
+    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V31")
     g.SetFont("s9", "Segoe UI")
     c := s.Ctl, lbl := s.Lbl
     c["Record"] := g.AddButton("xm ym w105 h30", "&Record")
@@ -3473,7 +3476,7 @@ VMB_UpdateTitle() {
     if s.Path != ""
         SplitPath(s.Path, &name)
     savedTag := s.Dirty ? " *" : (s.LastSavedAt != "" ? " (saved " . s.LastSavedAt . ")" : "")
-    s.Gui.Title := "Visual Macro Blocks V30" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
+    s.Gui.Title := "Visual Macro Blocks V31" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
     V7_SyncIdleHud()
 }
 
@@ -5078,8 +5081,8 @@ class V4Runner {
     }
     OnFailure(node, err) {
         policy := this.Settings.Get("onFail", "ask")
-        choice := node.Get("onFailStep", "")                           ; V31: the step's own "If it fails" choice comes first (the step debugger keeps asking)
-        if choice != "" && !this.Dbg {
+        choice := node.Get("onFailStep", "")                           ; V31: the step's own "If it fails" choice comes first
+        if choice != "" && !(this.Dbg && V5_Dbg().Mode != "run") {         ; (a step-by-step run keeps asking in the debugger bar)
             tries := 1
             plan := V31_FailPlan(choice, policy, tries)
             while plan = "retry" {
@@ -12807,7 +12810,10 @@ V17_EasyDesc(kind, fallback) {
 ; @summary Easy-mode "?" help: the three-step flow in plain words.
 ; @tags macro, gui, help, easy, v17
 V17_EasyHelp(*) {
-    MsgBox("TO DO THE SAME THING FOR MANY ITEMS"
+    MsgBox("RULES - THE EXCEL WAY"
+        . "`nOnly when: type a rule such as  Status = On  to do a step only for some rows. Type  otherwise  on the next step for the"
+        . " other rows. If it fails: choose what happens when a step cannot be done."
+        . "`n`nTO DO THE SAME THING FOR MANY ITEMS"
         . "`n1. Record it once for the first item.  2. Click the List tab and paste your items from Excel."
         . "`n3. Say Yes when asked to use the list columns.  4. Choose 'for each row of the List' and press Play."
         . "`n`nEASY MODE - RECORD, THEN PLAY"
@@ -12837,6 +12843,12 @@ V17_EasyHelp(*) {
         . "  the last 10 runs - check this step)."
         . "`n• Right-click the list -> Show columns (or the Columns tick box in the Step settings panel) for the V21 lines."
         . "`n`nNeed CSV rows, web pages, pictures or anything else? Click 'More features ▸' (Ctrl+Shift+E)."
+        . "`n`nNEW IN V31: rules are columns, not blocks. Only when = do the step only for some rows (Status = On, Amount > 100, Name is empty,"
+        . " Name contains Smith, # > 1, window Save As is open; join two with and / or). The next steps can say otherwise (or otherwise, Amount > 50)."
+        . " Right-click an Only when cell to build a rule by picking. A step left out by its rule is not a failure; the grid greys it for the Preview row."
+        . " If it fails = stop / skip this step / skip this row / try 3 times, per step. Right-click a row -> Add step: Type text, Press keys, Wait,"
+        . " Wait until window, Skip this row, Stop the run. A list run now stops after 3 bad rows in a row. The Blocks toolbox is plain (black on white)"
+        . " like the step list; right-click the list -> Coloured rows brings the colours back."
         . "`n`nNEW IN V30: do the same thing for many items, without loops. The Steps sheet is what to do once; the List sheet (tab under the grid) is the things to do it for."
         . "`n• Paste your items from Excel (Ctrl+V on the List sheet, or Paste list). Say Yes when asked to use the list columns: a Type step that typed Smith now types =Name, the Name column."
         . " You can also right-click a Type text cell -> Use list column, or type =Name in the cell (=# is the round number, '=x types a text that starts with =). =Name works on its own in a cell; inside longer text write {{Name}}."
@@ -20699,7 +20711,12 @@ V4_ExportPlayer(*) {
         MsgBox(err.Message, "V10 export failed", "Iconx")
 }
 V4_Help(*) {
-    MsgBox("NEW IN V30 (a List sheet and a Run switch instead of loop blocks):"
+    MsgBox("NEW IN V31 (rules as columns):"
+        . "`n• Only when: a rule such as  Status = On  or  Amount > 100  does a step only for some rows. otherwise (or otherwise, Amount > 50) on the next"
+        . " steps = the other rows. Right-click the cell to build a rule by picking. If it fails: stop / skip this step / skip this row / try 3 times."
+        . "`n• Right-click a row -> Add step: Type text, Press keys, Wait, Wait until window, Skip this row, Stop the run. A list run stops after 3 bad rows in a row."
+        . "`n• The Blocks toolbox is plain like the step list (right-click the list -> Coloured rows for colours)."
+        . "`n`nNEW IN V30 (a List sheet and a Run switch instead of loop blocks):"
         . "`n• Steps sheet = what to do once. List sheet = the things to do it for. Paste your items from Excel (Ctrl+V on the List sheet),"
         . "  say Yes to use the list columns (a Type step then types =Name), choose 'for each row of the List' above the grid and press Play."
         . "`n• A Type text cell can be =Name (a list column) or =# (the round number). Right-click it -> Use list column. Inside longer text write {{Name}}."
