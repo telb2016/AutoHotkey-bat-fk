@@ -1,4 +1,4 @@
-# PC test - one sheet for V19 to V26
+# PC test - one sheet for V19 to V29
 
 File: `VisualMacroBlocks-makecode-telek-V26-pccheck.ahk2`. This replaces the separate V21 / V22 / V23 / V24 / V25 checklists
 (those files stay in the folder, but you do not need them). Nothing here was ever run on a real Windows PC yet.
@@ -45,3 +45,17 @@ Open a macro with a click, a Type step and a Press step. The [Grid] button must 
 9. Select a row on a Waits cell and just type `3`, then Enter: the box opens with `3` already in it and the wait becomes 3 s.
 10. While a macro plays or records, double-click a cell: no box opens.
 11. Click [List]: everything looks and works as before.
+
+## 5. Excel feel (V29 file: `VisualMacroBlocks-makecode-telek-V29-excel.ahk2`)
+
+Open a macro with a click, a Type step and a Press step. The [Grid] button must be on. Try it at 100% and, if you can, at 125% / 150% screen scaling.
+
+1. Hold **Ctrl** and turn the mouse wheel over the grid: it zooms in steps (50 70 80 90 100 110 120 130 150 175 200 %), the text and the column widths grow and shrink together, and the percent at the right end of the filter row follows. Ctrl + plus, Ctrl + minus and Ctrl + 0 (100 %) do the same while the grid has the focus. The wheel without Ctrl still scrolls. The list's A+ / A- does not change the grid.
+2. Zoom to 150 %, double-click a **Waits first** cell: the little edit box sits exactly on the cell and uses the same big text.
+3. A **green frame** marks the current cell. Click another cell: the frame jumps there and the box left of the filter names it (`Waits first · step 7`). Arrow keys, **Home** / **End** (first / last column), **Ctrl+Home** / **Ctrl+End**, **Tab** / **Shift+Tab** (next / previous cell, on to the next row at the end) move it. If the frame is hard to see, say so.
+4. On a **Waits first** cell press **Ctrl+C**, select a Type step's Waits cell, press **Ctrl+V**: the wait is pasted; Ctrl+Z undoes it. Paste into Excel also gives the text. **Shift+Ctrl+C** copies the whole row. Ctrl+V on a worked-out cell (Program) says it cannot; Ctrl+X on a Note cell copies and clears it.
+5. **Drag a column title** to another place: the column moves, and Right / Left follow the new order.
+6. **Right-click a column title**: a menu with every column ticked. Untick one: it disappears and the cursor skips it. Right-click > **Reset columns** brings everything back.
+7. Zoom, move and hide something, close the editor window, open it again: zoom, widths, order and hidden columns are as you left them.
+8. Click **[List]**: the list looks and works as before; Ctrl + wheel / Ctrl + plus there still behave as before (the list zoom).
+9. While a macro plays or records, none of these keys do anything in the grid.
