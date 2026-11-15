@@ -19826,6 +19826,7 @@ V30_RenameColumn(j, newName := "") {
         return false
     V30_ListPush()
     VMB_Snapshot()
+    names := V31_NamesAll(s.Macro["settings"])                    ; V33: the names before the rename (the rules that use the old one follow below)
     list["headers"][j] := newName
     changed := 0
     for node in VMF_Flatten(s.Macro["blocks"])
@@ -19833,6 +19834,7 @@ V30_RenameColumn(j, newName := "") {
             node["text"] := StrReplace(node["text"], "{{" . old . "}}", "{{" . newName . "}}")
             changed += 1
         }
+    changed += V33_RenameInRules(s.Macro["blocks"], names, old, newName)
     V30_ListChanged(true)
     VMB_Refresh()
     VMB_Status("Column " . old . " is now called " . newName . "." . (changed ? "  " . changed . (changed = 1 ? " step was" : " steps were") . " changed to the new name." : ""))
@@ -21167,6 +21169,48 @@ V31_RenameInSteps(blocks, old, newName) {
     return changed
 }
 
+; @summary V33: when a List column or a Value is renamed, the Only when rules that name it follow (V30 / V31 changed only {{old}} in the steps' texts,
+;          so a rule such as  Status = On  kept the old name and stopped the run at the first row). names = every name known before the rename
+;          (the longest known name at the start of a part wins, as in V31_ParsePart, so "Product Description" is not mistaken for "Product").
+;          Returns how many steps changed. The rule's other words, "otherwise" and and / or are kept.
+; @returns Integer
+; @tags rules, rename, v33
+V33_RenameInRules(blocks, names, old, newName) {
+    changed := 0
+    for node in VMF_Flatten(blocks) {
+        if !(node is Map) || Trim(String(node.Get("when", ""))) = ""
+            continue
+        prefix := "", rest := Trim(String(node["when"]))
+        if RegExMatch(rest, "i)^(otherwise(?![\w])[\s,:;-]*)(.*)$", &m)
+            prefix := m[1], rest := m[2]
+        sp := V31_SplitParts(rest)
+        if !sp.Ok
+            continue
+        hit := false, out := []
+        for part in sp.Parts {
+            t := Trim(part), best := ""
+            for nm in names {
+                L := StrLen(nm)
+                if L > StrLen(best) && StrLower(SubStr(t, 1, L)) = StrLower(nm) {
+                    nxt := SubStr(t, L + 1, 1)
+                    if nxt = "" || RegExMatch(nxt, "[\s=<>!]")
+                        best := nm
+                }
+            }
+            if best != "" && StrLower(best) = StrLower(old) {
+                t := newName . SubStr(t, StrLen(best) + 1)
+                hit := true
+            }
+            out.Push(t)
+        }
+        if hit {
+            node["when"] := Trim(prefix . V4_Join(out, " " . sp.Join . " "))
+            changed += 1
+        }
+    }
+    return changed
+}
+
 ; @summary The one small form before step 1: a label (the name) and a box (the current value) for every "ask at start" value.
 ;          Enter / OK keeps or changes them; Cancel (or Esc, or closing it) stops the run before step 1.
 ;          Returns {Ok, Asked} (Asked = Map name -> text; Ok false = cancelled).
@@ -21573,6 +21617,9 @@ V31_ValCommit(refocus := true) {
     if col = 1 && old != plan.Item["name"] {
         VMB_Snapshot()
         n := V31_RenameInSteps(s.Macro["blocks"], old, plan.Item["name"])
+        known := V31_NamesAll(st)
+        known.Push(old)
+        n += V33_RenameInRules(s.Macro["blocks"], known, old, plan.Item["name"])        ; V33: Only when rules that use the old name follow too
         msg := "Value " . old . " is now called " . plan.Item["name"] . "." . (n ? "  " . n . (n = 1 ? " step was" : " steps were") . " changed to the new name." : "")
         V31_ValChanged()
         VMB_Refresh()
@@ -26109,6 +26156,13 @@ V4_SelfTest(path) {
         check("V31.1 edit cell: rename ok / clash with a List column / clash with another value / bad sign / same name again", V31_EditValue(v31vSet, 1, 1, "hi").Item["name"] . "|" . V31_EditValue(v31vSet, 1, 1, "Name").Ok . "|" . V31_EditValue(v31vSet, 1, 1, "n").Ok . "|" . V31_EditValue(v31vSet, 1, 1, "a b").Ok . "|" . V31_EditValue(v31vSet, 1, 1, "greeting").Ok . "|" . V31_EditValue(v31vSet, 1, 1, "n").Error, "hi|0|0|0|1|There is already a value called n.")
         check("V31.1 edit cell: counts up needs a whole number; switching to counts up / date fills a start; planning does not change the row", V31_EditValue(v31vSet, 2, 2, "x").Ok . "|" . V31_EditValue(v31vSet, 2, 2, "5").Item["value"] . "|" . V31_EditValue(v31vSet, 1, 3, "counts up").Item["value"] . "|" . V31_EditValue(v31vSet, 1, 3, "today's date").Item["value"] . "|" . V31_EditValue(v31vSet, 1, 3, "blah").Ok . "|" . v31vSet["values"][1]["when"] . "|" . V31_EditValue(v31vSet, 9, 1, "q").Ok, "0|5|1|MM/dd/yyyy|0|fixed|0")
         v31vSteps := [Map("type", "text", "text", "{{greeting}} x {{n}}"), V31_NewRemember("greeting", "abc"), Map("type", "text", "text", "plain")]
+        v33RR := [Map("type", "text", "text", "x", "when", "Status = On"), Map("type", "text", "text", "y", "when", "otherwise, Status is not Off and Amount > 5"),
+            Map("type", "text", "text", "z", "when", "Product Description contains pill"), Map("type", "text", "text", "w", "when", "Name = Status"), Map("type", "text", "text", "v")]
+        v33RRn := V33_RenameInRules(v33RR, ["Name", "Status", "Amount", "Product Description", "Product"], "Status", "State")
+        check("V33 renaming a List column / Value also renames it in the Only when rules (not in a value, not inside a longer name)", v33RRn . "|" . v33RR[1]["when"] . "|" . v33RR[2]["when"] . "|" . v33RR[3]["when"] . "|" . v33RR[4]["when"] . "|" . v33RR[5].Has("when"),
+            "2|State = On|otherwise, State is not Off and Amount > 5|Product Description contains pill|Name = Status|0")
+        v33RRn := V33_RenameInRules(v33RR, ["Name", "State", "Amount", "Product Description", "Product"], "Product", "Item")
+        check("V33 rename in rules: renaming Product leaves the rule that starts with the longer name Product Description alone", v33RRn . "|" . v33RR[3]["when"], "0|Product Description contains pill")
         check("V31.1 rename follows into steps: {{old}} in Type text and the Remember step's name", V31_RenameInSteps(v31vSteps, "greeting", "hi") . "|" . v31vSteps[1]["text"] . "|" . v31vSteps[2]["name"] . "|" . v31vSteps[3]["text"], "2|{{hi}} x {{n}}|hi|plain")
         v31vOld := Map("format", "VisualMacro", "version", 4, "settings", Map(), "blocks", [Map("type", "text", "text", "x")])
         check("V31.1 old macros: no values, same names for cells, the runner builds nothing", V31_ValuesOf(v31vOld["settings"]).Length . "|" . V31_NamesAll(v31vOld["settings"]).Length . "|" . V4Runner(v31vOld, {}).Vals.Count . "|" . V4Runner(v31vOld, {}).Counts.Count, "0|0|0|0")
