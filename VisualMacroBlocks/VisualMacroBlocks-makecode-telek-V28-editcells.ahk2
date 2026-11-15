@@ -203,8 +203,19 @@ F2::VMB_EditSelected()
 ^d::VMB_Duplicate()
 ^e::VMB_ToggleDisabled()
 ^a::VMB_CheckAll()
+#HotIf V28_EditorFocused()
+Enter::V28_Enter("down")
+NumpadEnter::V28_Enter("down")
+Tab::V28_Enter("tab")
++Tab::V28_Enter("back")
+Esc::V28_EscKey()
 #HotIf V27_GridFocused()
 ^c::V27_CopyRow()
+F2::V28_OpenCurrent()
+Enter::V28_OpenCurrent()
+NumpadEnter::V28_OpenCurrent()
+Left::V28_MoveCol(-1)
+Right::V28_MoveCol(1)
 #HotIf VMB_EditorActive()
 ^+e::V17_ToggleEasy()
 ^l::V8_VarySelectedDialog()
@@ -236,6 +247,7 @@ VMB() {
         Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map(), Shaky: Map(),
         Columns: 1, View: "grid", GridLV: 0, GridRows: [], GridNodes: Map(), GridRowOf: Map(), GridSync: false, GridSized: false,
         GridAll: [], GridBar: Map(), SortKey: "", SortDesc: false, SortMark: "", FilterQ: "", FilterProg: "", FilterAct: "", BarSync: false, SavedFilter: 0,
+        CellEdit: 0, CellPick: 0, CellOn: false, CellNode: 0, CellKey: "", CellRow: 0, CellOrig: "", CellIsPick: false, CellLast: 0, GridCol: 8,
         HasRun: false, History: false, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0}
     return s
 }
@@ -488,6 +500,7 @@ VMB_BuildGui() {
     g.OnEvent("Size", VMB_OnSize)
     g.OnEvent("Close", VMB_OnClose)
     V27_BuildGrid(g)                    ; V27: the grid (ListView) and the List / Grid buttons
+    V28_Build(g)                        ; V28: the cell editor (over the grid)
     s.Gui := g
 }
 
@@ -2661,6 +2674,7 @@ VMB_ToggleRecord(*) {
 ; @tags macro, record, blocks
 VMB_StartRecording() {
     s := VMB()
+    V28_Cancel(false)               ; V28: no cell editing while recording
     s.RecTarget := VMB_InsertPoint()
     s.RecSteps := []
     s.RecWasEmpty := !s.Macro["blocks"].Length
@@ -15833,6 +15847,7 @@ V27_PlaceGrid() {
     s := VMB()
     if !s.GridLV || !s.TV || !s.Gui || !s.Ctl.Has("ViewGrid")
         return
+    V28_Finish()                                   ; V28: the cell editor would sit on the old place
     grid := s.View = "grid"
     s.TV.GetPos(&tx, &ty, &tw, &th)
     barH := Round(24 * A_ScreenDPI / 96)
@@ -15861,6 +15876,7 @@ V27_SetView(view) {
         return
     if s.View = view
         return
+    V28_Cancel(false)
     node := V27_SelectedNode()
     s.View := view
     IniWrite(view, s.Ini, "V27", "View")
@@ -15898,6 +15914,7 @@ V27_FillGrid(rows := "") {
     lv := s.GridLV
     if !lv || !(s.Macro is Map)
         return
+    V28_Cancel(false)                   ; V28: the rows change under the editor
     keep := V27_SelectedNode()
     if !IsObject(rows) {
         s.GridAll := V27_Rows(s.Macro["blocks"], s.Macro["settings"], V27_State())
@@ -15961,8 +15978,16 @@ V27_OnSelect(lv, row, selected) {
 ; @summary Double-click a grid row: Edit that step.
 ; @tags grid, gui, v27
 V27_OnDoubleClick(lv, row) {
-    if row
-        VMB_EditSelected()
+    if !row
+        return
+    hit := V28_HitCell()                           ; V28: an editable cell opens the cell editor, any other cell the full Edit box
+    if hit.Row = row && hit.Col >= 1 && hit.Col <= V27_Columns().Length {
+        VMB().GridCol := hit.Col
+        node := VMB().GridNodes.Get(row, 0)
+        if IsObject(node) && V28_Editable(node, V27_Columns()[hit.Col].Key) != "" && V28_Open(row, hit.Col)
+            return
+    }
+    VMB_EditSelected()
 }
 
 ; @summary Right-click a grid row: the same menu as the tree for that step.
@@ -16318,6 +16343,7 @@ V27_ClearFilter(refill := true) {
 ; @tags grid, filter, v27
 V27_RunStart() {
     s := VMB()
+    V28_Cancel()                    ; V28: no cell editing while a run starts
     s.SavedFilter := V27_FilterOn() ? Map("Q", s.FilterQ, "Prog", s.FilterProg, "Act", s.FilterAct) : 0
     if !s.SavedFilter
         return
@@ -16674,6 +16700,373 @@ V28_ApplyCell(node, key, input) {
     if plan.Ok
         V28_ApplyChanges(node, plan.Changes)
     return {Ok: plan.Ok, Error: plan.Error}
+}
+
+; ----------------------------------------------------------------------------
+; V28 item B: the editor in the window (an Edit / DropDownList placed on top of the cell)
+; ----------------------------------------------------------------------------
+
+; @summary Creates the cell editor once: a hidden Edit (s.CellEdit) and a hidden DropDownList (s.CellPick), and hooks the grid
+;          (click = current cell, scroll / column resize = close the editor).
+;          Both controls are NOT in s.Ctl, so the Easy / Full layout code does not know them.
+; @tags grid, edit, gui, v28
+V28_Build(g) {
+    s := VMB()
+    s.GridLV.Opt("+0x4000000")                                ; WS_CLIPSIBLINGS: the grid must not paint over the editor that sits on it
+    s.CellEdit := g.AddEdit("x10 y10 w100 h22 Hidden +0x4000000")
+    s.CellEdit.OnEvent("LoseFocus", V28_OnLoseFocus)
+    s.CellPick := g.AddDropDownList("x10 y10 w100 Hidden", ["x"])
+    s.CellPick.OnEvent("LoseFocus", V28_OnLoseFocus)
+    s.CellPick.OnCommand(9, V28_OnPickDone)                    ; CBN_SELENDOK: a choice was clicked in the list
+    s.GridLV.OnEvent("Click", V28_OnClick)
+    for code in [-181, -326, -327, -325, -321]                 ; LVN_ENDSCROLL, header: begin / end / double-click / changed
+        s.GridLV.OnNotify(code, V28_OnScrollOrResize)
+}
+
+; @summary The cell rectangle of a grid cell in the grid's own client pixels: {L, T, R, B}, or 0 when the cell is not shown.
+; @tags grid, edit, gui, v28
+V28_CellPixels(row, col) {
+    s := VMB()
+    rc := Buffer(16, 0)
+    NumPut("Int", 0, "Int", col - 1, rc)                       ; left = LVIR_BOUNDS, top = sub-item (column - 1)
+    if !SendMessage(0x1038, row - 1, rc.Ptr, s.GridLV)         ; LVM_GETSUBITEMRECT
+        return 0
+    return {L: NumGet(rc, 0, "Int"), T: NumGet(rc, 4, "Int"), R: NumGet(rc, 8, "Int"), B: NumGet(rc, 12, "Int")}
+}
+
+; @summary The cell rectangle in the window's own units (the same units Move / GetPos use): {X, Y, W, H}, or 0.
+;          Clipped to the grid's visible area. The window's controls use 96-dpi units, so pixels are scaled by 96 / A_ScreenDPI.
+; @tags grid, edit, gui, v28
+V28_CellRect(row, col) {
+    s := VMB()
+    p := V28_CellPixels(row, col)
+    if !IsObject(p)
+        return 0
+    rc := Buffer(16, 0)
+    DllCall("GetClientRect", "Ptr", s.GridLV.Hwnd, "Ptr", rc)
+    right := Min(p.R, NumGet(rc, 8, "Int"))
+    pt := Buffer(8, 0)
+    NumPut("Int", p.L, "Int", p.T, pt)
+    DllCall("MapWindowPoints", "Ptr", s.GridLV.Hwnd, "Ptr", s.Gui.Hwnd, "Ptr", pt, "UInt", 1)
+    f := 96 / A_ScreenDPI
+    return {X: Round(NumGet(pt, 0, "Int") * f), Y: Round(NumGet(pt, 4, "Int") * f),
+        W: Max(8, Round((right - p.L) * f)), H: Max(8, Round((p.B - p.T) * f))}
+}
+
+; @summary Scrolls the grid sideways (and up / down) so a cell is fully visible, before the editor is placed on it.
+; @tags grid, edit, gui, v28
+V28_EnsureVisible(row, col) {
+    s := VMB()
+    try s.GridLV.Modify(row, "Vis")
+    p := V28_CellPixels(row, col)
+    if !IsObject(p)
+        return
+    rc := Buffer(16, 0)
+    DllCall("GetClientRect", "Ptr", s.GridLV.Hwnd, "Ptr", rc)
+    cw := NumGet(rc, 8, "Int")
+    dx := 0
+    if p.L < 0
+        dx := p.L
+    else if p.R > cw
+        dx := Min(p.R - cw, p.L)
+    if dx
+        SendMessage(0x1014, dx, 0, s.GridLV)                   ; LVM_SCROLL
+}
+
+; @summary Which cell is under the mouse: {Row, Col} (1-based, 0 when none), by LVM_SUBITEMHITTEST.
+; @tags grid, edit, gui, v28
+V28_HitCell() {
+    s := VMB()
+    pt := Buffer(8, 0)
+    DllCall("GetCursorPos", "Ptr", pt)
+    DllCall("ScreenToClient", "Ptr", s.GridLV.Hwnd, "Ptr", pt)
+    inf := Buffer(24, 0)
+    NumPut("Int", NumGet(pt, 0, "Int"), "Int", NumGet(pt, 4, "Int"), inf)
+    SendMessage(0x1039, 0, inf.Ptr, s.GridLV)                  ; LVM_SUBITEMHITTEST
+    return {Row: NumGet(inf, 12, "Int") + 1, Col: NumGet(inf, 16, "Int") + 1}
+}
+
+; @summary True while the cell editor (the Edit or the drop-down) has the keyboard focus - for Enter / Tab / Esc.
+;          False while recording or playing, and when this window is not the active one.
+; @tags grid, edit, hotkey, v28
+V28_EditorFocused(*) {
+    s := VMB()
+    if !s.CellOn || !s.Gui || VM_IsPlaying() || VM_IsRecording() || !WinActive("ahk_id " . s.Gui.Hwnd)
+        return false
+    focus := DllCall("GetFocus", "Ptr")
+    return focus = s.CellEdit.Hwnd || focus = s.CellPick.Hwnd || DllCall("IsChild", "Ptr", s.CellPick.Hwnd, "Ptr", focus)
+}
+
+; @summary The text or choice now in the editor.
+; @tags grid, edit, gui, v28
+V28_EditorInput() {
+    s := VMB()
+    return s.CellIsPick ? s.CellPick.Text : s.CellEdit.Value
+}
+
+; @summary Opens the editor on a grid cell (row = grid row, col = column number). startText = a typed first character (or "").
+;          Not editable: says so in the status bar and returns false. Never while recording or playing.
+; @tags grid, edit, gui, v28
+V28_Open(row, col, startText := "") {
+    s := VMB()
+    if VM_IsRecording() || VM_IsPlaying() || !s.GridLV || s.View != "grid" || !s.GridNodes.Has(row)
+        return false
+    V28_Finish(false)                                          ; a cell that is still open is saved first
+    node := s.GridNodes.Get(row, 0)
+    cols := V27_Columns()
+    if !IsObject(node) || col < 1 || col > cols.Length
+        return false
+    key := cols[col].Key
+    kind := V28_Editable(node, key)
+    s.GridCol := col
+    if kind = "" {
+        VMB_Status(V28_NotEditableText())
+        return false
+    }
+    V28_EnsureVisible(row, col)
+    rect := V28_CellRect(row, col)
+    if !IsObject(rect)
+        return false
+    s.CellNode := node, s.CellKey := key, s.CellRow := row, s.CellOrig := V28_EditText(node, key)
+    s.CellIsPick := kind is Array
+    if s.CellIsPick {
+        pick := s.CellPick
+        pick.Delete()
+        pick.Add(kind)
+        pick.SetFont("s" . s.FontSize, "MS Shell Dlg 2"), pick.SetFont(, "Segoe UI")
+        choice := s.CellOrig
+        if startText != ""
+            for item in kind
+                if StrLower(SubStr(item, 1, StrLen(startText))) = StrLower(startText) {
+                    choice := item
+                    break
+                }
+        try pick.Choose(choice)
+        pick.Move(rect.X, rect.Y, Max(rect.W, 96))
+        shown := pick
+    } else {
+        ed := s.CellEdit
+        ed.SetFont("s" . s.FontSize, "MS Shell Dlg 2"), ed.SetFont(, "Segoe UI")
+        ed.Value := startText != "" ? startText : s.CellOrig
+        ed.Move(rect.X, rect.Y, rect.W, rect.H)
+        shown := ed
+    }
+    s.CellOn := true
+    shown.Visible := true
+    DllCall("SetWindowPos", "Ptr", shown.Hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x43)     ; HWND_TOP, no move / size, show
+    shown.Focus()
+    DllCall("RedrawWindow", "Ptr", shown.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x185)     ; paint it now, on top of the grid
+    if !s.CellIsPick {
+        n := startText != "" ? StrLen(startText) : 0
+        SendMessage(0xB1, startText != "" ? n : 0, startText != "" ? n : -1, s.CellEdit)    ; EM_SETSEL: caret at end, or select all
+    } else if startText = ""
+        PostMessage(0x14F, 1, 0, s.CellPick)                   ; CB_SHOWDROPDOWN: the list opens, like a double-click on a choice
+    VMB_Status(V28_Hint(node, key) . "   Enter saves, Tab goes on, Esc cancels.")
+    return true
+}
+
+; @summary Hides the editor. refocus = put the keyboard focus back on the grid (not when the user clicked somewhere else).
+; @tags grid, edit, gui, v28
+V28_Hide(refocus := true) {
+    s := VMB()
+    if !s.CellEdit
+        return
+    s.CellOn := false
+    s.CellEdit.Visible := false
+    s.CellPick.Visible := false
+    if refocus && s.GridLV && s.View = "grid"
+        try s.GridLV.Focus()
+}
+
+; @summary Esc / refresh / run start: closes the editor and throws the typed value away. Safe to call when it is not open.
+; @tags grid, edit, gui, v28
+V28_Cancel(refocus := true) {
+    s := VMB()
+    if s.CellOn
+        V28_Hide(refocus)
+}
+
+; @summary Closes the editor and keeps the value when it is valid (when it is not, the value is dropped and the status bar says why).
+;          Used when the user clicks elsewhere, scrolls, resizes a column or the window.
+; @tags grid, edit, gui, v28
+V28_Finish(refocus := true) {
+    s := VMB()
+    if !s.CellOn
+        return
+    if !V28_Commit(refocus)
+        V28_Cancel(refocus)
+}
+
+; @summary Changes a step by a plan: snapshot (Ctrl+Z undoes it), apply, Dirty, refresh keeping sort / filter and the selection, autosave.
+; @tags grid, edit, gui, v28
+V28_Do(node, plan, message) {
+    s := VMB()
+    VMB_Snapshot()
+    V28_ApplyChanges(node, plan.Changes)
+    s.Dirty := true
+    VMB_Refresh(node)
+    V7_AutoSaveNow()
+    VMB_Status(message)
+}
+
+; @summary Saves the editor's value into the step. A rejected value keeps the editor open, shows the sentence in the status bar and
+;          selects all the text. Returns true when the editor is closed (saved, or nothing to save), false when it stays open.
+; @tags grid, edit, gui, v28
+V28_Commit(refocus := true) {
+    s := VMB()
+    if !s.CellOn
+        return true
+    if VM_IsRecording() || VM_IsPlaying() {
+        V28_Hide(false)
+        return true
+    }
+    node := s.CellNode, key := s.CellKey
+    input := V28_EditorInput()
+    plan := V28_Plan(node, key, input)
+    if !plan.Ok {
+        VMB_Status(plan.Error)
+        if !s.CellIsPick {
+            s.CellEdit.Focus()
+            SendMessage(0xB1, 0, -1, s.CellEdit)               ; EM_SETSEL: select all
+        }
+        return false
+    }
+    s.CellLast := node
+    V28_Hide(refocus)
+    if input = s.CellOrig
+        return true
+    title := ""
+    for col in V27_Columns()
+        if col.Key = key
+            title := col.Title
+    V28_Do(node, plan, "Changed " . title . ". Ctrl+Z undoes it.")
+    return true
+}
+
+; @summary Enter / Tab / Shift+Tab in the editor: saves, then moves. "down" = select the cell below, "tab" = open the next editable
+;          cell of the row (wraps to the next row), "back" = the one before. A rejected value keeps the editor open.
+; @tags grid, edit, gui, v28
+V28_Enter(where) {
+    s := VMB()
+    col := s.GridCol
+    if !V28_Commit()
+        return
+    row := s.GridRowOf.Get(s.CellLast, 0)
+    if !row
+        return
+    cols := V27_Columns()
+    if where = "down" {
+        if row < s.GridNodes.Count
+            V28_SelectRow(row + 1)
+        VMB_Status("Cell: " . cols[col].Title)
+        return
+    }
+    step := where = "back" ? -1 : 1
+    r := row, c := col
+    loop cols.Length * 2 {                                       ; at most one full turn of the row, then the next / previous row
+        c += step
+        if c > cols.Length || c < 1 {
+            r += step
+            c := step > 0 ? 1 : cols.Length
+            if r < 1 || r > s.GridNodes.Count
+                return
+        }
+        if V28_Editable(s.GridNodes[r], cols[c].Key) != "" {
+            V28_SelectRow(r)
+            V28_Open(r, c)
+            return
+        }
+    }
+}
+
+; @summary Selects a grid row (and the same step in the hidden tree, so the buttons keep working).
+; @tags grid, edit, gui, v28
+V28_SelectRow(row) {
+    s := VMB()
+    node := s.GridNodes.Get(row, 0)
+    if !IsObject(node)
+        return
+    s.GridSync := true
+    try s.GridLV.Modify(row, "Select Focus Vis")
+    s.GridSync := false
+    if s.NodeItem.Has(node)
+        s.TV.Modify(s.NodeItem[node], "Select")
+}
+
+; @summary Esc in the editor.
+; @tags grid, edit, gui, v28
+V28_EscKey() {
+    V28_Cancel()
+    VMB_Status("Not changed.")
+}
+
+; @summary F2 / Enter in the grid: edit the current cell (the current column of the selected row).
+; @tags grid, edit, gui, v28
+V28_OpenCurrent() {
+    s := VMB()
+    row := s.GridLV ? s.GridLV.GetNext(0) : 0
+    if row
+        V28_Open(row, s.GridCol)
+}
+
+; @summary Left / Right in the grid: moves the current column; the status bar names the cell.
+; @tags grid, edit, gui, v28
+V28_MoveCol(step) {
+    s := VMB()
+    cols := V27_Columns()
+    s.GridCol := Max(1, Min(cols.Length, s.GridCol + step))
+    row := s.GridLV.GetNext(0)
+    if row
+        V28_EnsureVisible(row, s.GridCol)
+    V28_CellStatus(row)
+}
+
+; @summary Status bar: "Cell: Waits first" and whether it can be edited.
+; @tags grid, edit, gui, v28
+V28_CellStatus(row) {
+    s := VMB()
+    col := V27_Columns()[s.GridCol]
+    node := row ? s.GridNodes.Get(row, 0) : 0
+    can := IsObject(node) && V28_Editable(node, col.Key) != ""
+    VMB_Status("Cell: " . col.Title . (can ? "   (F2 or Enter edits it)" : "   (worked out from the step, not editable here)"))
+}
+
+; @summary Click in the grid: the clicked column becomes the current column.
+; @tags grid, edit, gui, v28
+V28_OnClick(lv, row) {
+    s := VMB()
+    if !row
+        return
+    hit := V28_HitCell()
+    if hit.Row = row && hit.Col >= 1 && hit.Col <= V27_Columns().Length {
+        s.GridCol := hit.Col
+        V28_CellStatus(row)
+    }
+}
+
+; @summary The editor lost the keyboard focus (the user clicked elsewhere): save when valid.
+; @tags grid, edit, gui, v28
+V28_OnLoseFocus(ctl, *) {
+    s := VMB()
+    if !s.CellOn || DllCall("GetFocus", "Ptr") = ctl.Hwnd     ; a late message from an editor that has the focus again (Tab to the next cell)
+        return
+    V28_Finish(false)
+}
+
+; @summary A choice was clicked in the drop-down: save it.
+; @tags grid, edit, gui, v28
+V28_OnPickDone(*) {
+    s := VMB()
+    if s.CellOn
+        V28_Commit()
+}
+
+; @summary The grid scrolled or a column was resized: the editor would sit on the wrong cell, so it closes (saving a valid value).
+; @tags grid, edit, gui, v28
+V28_OnScrollOrResize(*) {
+    s := VMB()
+    if s.CellOn
+        V28_Finish()
 }
 
 ; ============================================================================
@@ -18056,6 +18449,10 @@ V4_SelfTest(path) {
         check("V28 apply on: maybe refused", V28_ApplyCell(v28Type, "onoff", "maybe").Ok, 0)
         check("V28 apply note: written, then blank removes the key", V28_ApplyCell(v28Type, "note", " check this ").Ok . v28Type["note"] . "," . (V28_ApplyCell(v28Type, "note", "").Ok . v28Type.Has("note")), "1check this,10")
         check("V28 plan does not touch the node", JSON.Stringify(v28Type) . V28_Plan(v28Type, "note", "zzz").Ok, JSON.Stringify(v28Type) . "1")
+        ; V28 item B: the editor in the window (live behaviour is checked in the real window; here only what needs no window)
+        check("V28 editor: not focused (and so no Enter / Tab / Esc hotkey) when it is not open", V28_EditorFocused(), false)
+        check("V28 editor: its controls are not in the Easy / Full layout list", VMB().Ctl.Has("CellEdit") || VMB().Ctl.Has("CellPick"), false)
+        check("V28 editor: closing a closed editor does nothing", V28_Cancel() . V28_Finish() . VMB().CellOn, "0")
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
