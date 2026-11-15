@@ -17,3 +17,15 @@ back to us. Lines say PASS or CHECK. If it offers **Use plain marks**, press it 
 4. Play a saved macro 3 times, right-click > Run history... -> 3 lines and a summary line "Last 3 runs: ...".
 5. Look at the step list -> black text on white, no coloured bars (right-click > Coloured rows brings the colours back).
 6. Put a step inside a Repeat block -> the # / Program / Waits / Marks / What columns still line up for the steps inside it.
+
+## 3. Grid (V27 file: `VisualMacroBlocks-makecode-telek-V27-grid.ahk2`)
+
+Open a macro with steps in at least two programs (and, if you can, a Repeat block). The [Grid] button must be on.
+
+1. The grid shows one row per step, every cell filled (`–` where a cell does not apply), with grid lines. The text is the same size as the rest of the window; A+ / A- make it bigger / smaller.
+2. Click the **Program** header: rows group by program and the header shows a small triangle. Click it again: reverse order. Click **Step order** (or the `#` header): back to the macro's order. The status bar says the sort is only a view.
+3. Type `click` in the filter box above the grid: only click steps show, and the status bar says `Showing N of M steps`. Try `program:notepad` and two words (`click notepad`). Pick a Program in the first drop-down: only that program's steps show. **Clear** shows everything again.
+4. Select a row while it is sorted and filtered, press **Edit** (or double-click the row): the right step opens. Right-click a row: the usual step menu.
+5. Press Play with a filter typed: the filter clears, the running row is selected and scrolls into view; after the run the filter is back.
+6. Click **Copy table**, paste into Excel: a header row, and each value lands in its own cell. Select one row, press Ctrl+C, paste: that row only.
+7. Click **[List]**: the tree is back exactly as before, and the filter row is gone. The step numbers in the grid (they can skip a number where a Repeat / If block has one) are the same as in the list.
