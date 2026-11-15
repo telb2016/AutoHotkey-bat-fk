@@ -1,4 +1,6 @@
-; VisualMacroBlocks-makecode-telek-V33
+; VisualMacroBlocks-makecode-telek-V34
+; V34 = V33 + fixes from the first PC test: steadier replay (settle floor, explicit key / double-click presses), header menu at the right place,
+;       Ready to play? in Easy mode, fast Enter in a cell, caption button names, unsaved changes restored after a restart. See V34-NOTES.md.
 ; V33 = V32 + more Excel: select a block of cells (Shift+arrows, Shift+click, Ctrl+Shift+arrows, Ctrl+A) with a summary in the status bar,
 ;       copy / paste / fill down / fill right / clear a block (one undo step), the same on the List and Values sheets, frozen # and Action
 ;       columns when the grid is scrolled sideways, an Excel look (grey headings and row numbers), and Undo keeps your row.
@@ -408,6 +410,8 @@ VMB_Main() {
         try VMB_LoadFile(last)
         catch as err
             VMB_Status("Could not reopen " . last . ": " . err.Message)
+        else
+            V34_MaybeRestoreDraft(last)            ; V34: unsaved edits of the last session come back (marked with *)
     } else if FileExist(s.AutoSavePath) {
         try {
             s.Macro := VM_Load(s.AutoSavePath)
@@ -432,7 +436,7 @@ VMB_Main() {
 VMB_BuildGui() {
     s := VMB()
     s.Easy := Integer(IniRead(s.Ini, "V17", "EasyMode", 1)) ? 1 : 0
-    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V33")
+    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V34")
     g.SetFont("s9", "Segoe UI")
     c := s.Ctl, lbl := s.Lbl
     c["Record"] := g.AddButton("xm ym w105 h30", "&Record")
@@ -3562,7 +3566,7 @@ VMB_UpdateTitle() {
     if s.Path != ""
         SplitPath(s.Path, &name)
     savedTag := s.Dirty ? " *" : (s.LastSavedAt != "" ? " (saved " . s.LastSavedAt . ")" : "")
-    s.Gui.Title := "Visual Macro Blocks V33" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
+    s.Gui.Title := "Visual Macro Blocks V34" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
     V7_SyncIdleHud()
 }
 
@@ -9266,8 +9270,10 @@ V7_AutoSaveNow(*) {
         return
     try VMB_ControlsToSettings()
     try {
-        if s.AutoSavePath != "" && s.Macro["blocks"].Length
+        if s.AutoSavePath != "" && s.Macro["blocks"].Length {
             VM_Save(s.Macro, s.AutoSavePath)
+            try IniWrite(s.Path, s.Ini, "V34", "DraftFor")          ; V34: which file the draft belongs to ("" = never saved)
+        }
     }
     if s.Ctl.Has("AutoSave") && s.Ctl["AutoSave"].Value && s.Path != "" && s.Dirty {
         if !VM_Validate(s.Macro).Length && !V7_HasPrivacyFindings(s.Macro) {
@@ -24471,6 +24477,38 @@ V34_CaptionFallback(root, x, y, hit, part) {
     return part
 }
 
+; ---- V34 finding 7: unsaved work survives a restart --------------------------------------------------------------------
+; The X button only hides the window (tray + HUD); nothing is lost and no question is needed. Tray -> Quit Completely asks.
+; But after the script was ended some other way (Ctrl+Shift+X, killed, restarted), start-up opened the saved file and ignored the
+; newer autosave draft, so unsaved edits were silently gone. Now the draft is restored when it belongs to that file.
+
+; @summary True when the autosave draft should replace the file that is opened at start: the draft was made for this very file,
+;          is newer and has different content. Stamps are YYYYMMDDHHMISS.
+; @tags macro, file, autosave, v34
+V34_UseDraft(draftFor, lastFile, draftStamp, fileStamp, draftText, fileText) {
+    if draftFor = "" || draftFor != lastFile || draftText = ""
+        return false
+    return draftStamp > fileStamp && draftText != fileText
+}
+
+; @summary Start-up: loads the autosave draft over the just opened last file when V34_UseDraft says so; marks it unsaved.
+; @tags macro, file, autosave, v34
+V34_MaybeRestoreDraft(last) {
+    s := VMB()
+    try {
+        if !FileExist(s.AutoSavePath)
+            return false
+        draftFor := IniRead(s.Ini, "V34", "DraftFor", "")
+        if !V34_UseDraft(draftFor, last, FileGetTime(s.AutoSavePath, "M"), FileGetTime(last, "M"), FileRead(s.AutoSavePath, "UTF-8"), FileRead(last, "UTF-8"))
+            return false
+        s.Macro := VM_Load(s.AutoSavePath)
+        s.Dirty := true
+        VMB_Status("Restored your unsaved changes to " . last . " from the autosave draft (the title shows *). Save to keep them.")
+        return true
+    }
+    return false
+}
+
 ; ==== V34 END (new V34 functions are added above this line)
 
 ; ============================================================================
@@ -24581,7 +24619,11 @@ V4_ExportPlayer(*) {
         MsgBox(err.Message, "V10 export failed", "Iconx")
 }
 V4_Help(*) {
-    MsgBox("NEW IN V33 (more Excel: blocks of cells):"
+    MsgBox("NEW IN V34 (fixes from the first PC test):"
+        . "`n• Replaying is steadier: two typing or click steps in a row always get at least 0.12 s between them (setting minStepMs), a double-click is sent as two real clicks, and the next step waits until the program has taken the typed text in."
+        . "`n• Right-click on a column title opens the column menu wherever the window is; the ? menu opens under its button. Ready to play? also shows in Easy mode."
+        . "`n• Enter / Tab in a cell no longer loses the last typed characters. Caption buttons are named Minimize / Maximize / Restore / Close. Unsaved changes come back after a restart (the X button only hides the window to the tray)."
+        . "`n`nBEFORE (V33, more Excel: blocks of cells):"
         . "`n• Select several cells: Shift+arrows or Shift+click; Ctrl+Shift+arrow goes to the edge, Ctrl+A selects every cell. A plain arrow or click goes back to one cell."
         . " The status bar says how many cells, and for Waits first the total time (on the List sheet the sum of numbers)."
         . "`n• Ctrl+C copies the block as text (Excel can paste it). Ctrl+V pastes a block from the current cell, or one value onto the whole selection, cell by cell;"
@@ -26667,6 +26709,11 @@ V4_SelfTest(path) {
         check("V34 caption: an unknown window keeps the old name", V34_CaptionFallback(0, 10, 10, 2, "title bar"), "title bar")
         check("V34 caption: a body hit keeps its name", V34_CaptionFallback(0, 10, 10, 1, ""), "")
         check("V34 caption: Restore reads as a button name", V20_WhatText(Map("what", Map("kind", "Restore button"))), "the Restore button")
+        check("V34 draft: newer and different for the same file = use it", V34_UseDraft("C:\m\a.json", "C:\m\a.json", "20261115082500", "20261115082300", "{x}", "{y}"), true)
+        check("V34 draft: same content = nothing to restore", V34_UseDraft("C:\m\a.json", "C:\m\a.json", "20261115082500", "20261115082300", "{y}", "{y}"), false)
+        check("V34 draft: older than the file = no", V34_UseDraft("C:\m\a.json", "C:\m\a.json", "20261115082000", "20261115082300", "{x}", "{y}"), false)
+        check("V34 draft: made for another file = no", V34_UseDraft("C:\m\b.json", "C:\m\a.json", "20261115082500", "20261115082300", "{x}", "{y}"), false)
+        check("V34 draft: no record = no", V34_UseDraft("", "C:\m\a.json", "20261115082500", "20261115082300", "{x}", "{y}"), false)
         check("V34 steady runner: a settle wait is only for steady input steps", V34_FloorMs(V18_Steady(V4Runner(VMF_NewMacro(), {})), VMF_NewMacro()["settings"]), 120)
     } catch as err {
         failures += 1
