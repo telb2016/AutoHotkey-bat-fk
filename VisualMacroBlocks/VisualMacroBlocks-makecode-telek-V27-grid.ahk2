@@ -2855,6 +2855,7 @@ VMB_Play(onlySelected := false, startMode := "run", runTo := 0) {
     keptNotes := s.LastNotes        ; V21: VMB_Snapshot clears them; a run of only the selected steps leaves them as they were
     VMB_Snapshot()                  ; corrections made while it plays can be undone
     s.PlayFlat := VMF_Flatten(macro["blocks"])
+    V27_RunStart()                  ; V27: a filter must not hide the running step
     VMB_SetBusyUi(true)
     VMB_Status(startMode = "step" ? "Step by step: Down (or F10) runs the next step, F5 runs on, Esc stops."
         : "Playing...  F10 pauses, Esc stops.")
@@ -2876,6 +2877,7 @@ VMB_Play(onlySelected := false, startMode := "run", runTo := 0) {
         result.Message .= "  (The line you chose to run to was never reached.)"
     s.Panel := 0
     s.PlayFlat := []
+    V27_RunEnd()                    ; V27: the filter comes back
     VMB_SetBusyUi(false)
     note := ""
     if !result.Changed
@@ -15801,6 +15803,16 @@ V27_BuildGrid(g) {
         s.GridLV.ModifyCol(i, col.Width)
     s.GridLV.OnEvent("ColClick", V27_OnColClick)
     b := s.GridBar := Map()
+    b["Filter"] := g.AddEdit("x10 y10 w200 h22 Hidden")
+    SendMessage(0x1501, 1, StrPtr("Filter..."), b["Filter"])       ; EM_SETCUEBANNER
+    b["Filter"].OnEvent("Change", V27_OnFilter)
+    b["Prog"] := g.AddDropDownList("x+4 yp w120 Hidden", ["All programs"])
+    b["Act"] := g.AddDropDownList("x+4 yp w104 Hidden", ["All actions"])
+    b["Prog"].Choose(1), b["Act"].Choose(1)
+    b["Prog"].OnEvent("Change", V27_OnPick)
+    b["Act"].OnEvent("Change", V27_OnPick)
+    b["Clear"] := g.AddButton("x+4 yp w54 h22 Hidden", "Clear")
+    b["Clear"].OnEvent("Click", (*) => V27_ClearFilter())
     b["Reset"] := g.AddButton("x10 y10 w84 h22 Hidden", "Step order")
     b["Reset"].OnEvent("Click", (*) => V27_SortReset())
     s.GridLV.OnEvent("ItemSelect", V27_OnSelect)
@@ -16035,6 +16047,12 @@ V27_SortRows(rows, key, desc, isNum) {
 V27_ViewRows() {
     s := VMB()
     rows := s.GridAll
+    if s.FilterProg != ""
+        rows := V27_PickRows(rows, "app", s.FilterProg)
+    if s.FilterAct != ""
+        rows := V27_PickRows(rows, "action", s.FilterAct)
+    if Trim(s.FilterQ) != ""
+        rows := V27_FilterRows(rows, s.FilterQ, V27_Columns())
     if s.SortKey != "" {
         for col in V27_Columns()
             if col.Key = s.SortKey
@@ -16134,9 +16152,192 @@ V27_PlaceBar(x, y, w, h, show) {
         ctl.Visible := show
 }
 
-; @summary Fills the Program / Action drop-downs from the rows (item D). Nothing here yet.
+; ----------------------------------------------------------------------------
+; V27 item D: filter (a view only: rows that do not match are only not shown)
+; ----------------------------------------------------------------------------
+
+; @summary Keeps the rows that match the typed text. Several words = all must match; a word matches when ANY cell
+;          contains it (case-insensitive). "column:word" limits that word to one column (the column's key or its title
+;          without spaces, e.g. program:notepad, action:click). A "column:" with no word yet, or an unknown column, is
+;          not a column filter ("abc:def" is then looked for as plain text). Returns a NEW array; empty text = all rows.
+; @returns Array of rows
+; @tags grid, filter, v27
+V27_FilterRows(rows, query, columns) {
+    terms := []
+    for w in StrSplit(Trim(query, " `t`r`n"), [" ", "`t"]) {
+        if w = ""
+            continue
+        key := "", word := w
+        p := InStr(w, ":")
+        if p > 1 {
+            head := SubStr(w, 1, p - 1)
+            for col in columns {
+                if col.Key = head || StrReplace(col.Title, " ", "") = head {
+                    key := col.Key, word := SubStr(w, p + 1)
+                    break
+                }
+            }
+        }
+        if word != ""
+            terms.Push(Map("Key", key, "Word", word))
+    }
+    out := []
+    for r in rows {
+        ok := true
+        for t in terms {
+            hit := false
+            if t["Key"] != "" {
+                hit := InStr(String(r.Get(t["Key"], "")), t["Word"]) > 0
+            } else {
+                for col in columns {
+                    if InStr(String(r.Get(col.Key, "")), t["Word"]) {
+                        hit := true
+                        break
+                    }
+                }
+            }
+            if !hit {
+                ok := false
+                break
+            }
+        }
+        if ok
+            out.Push(r)
+    }
+    return out
+}
+
+; @summary Keeps the rows whose cell `key` equals `value` (case-insensitive). Used by the Program / Action drop-downs.
+; @returns Array of rows
+; @tags grid, filter, v27
+V27_PickRows(rows, key, value) {
+    out := []
+    for r in rows
+        if String(r.Get(key, "")) = value
+            out.Push(r)
+    return out
+}
+
+; @summary The distinct cell texts of one column, in order of first appearance ("–" and empty left out).
+; @returns Array of text
+; @tags grid, filter, v27
+V27_Distinct(rows, key) {
+    seen := Map(), out := []
+    for r in rows {
+        v := String(r.Get(key, ""))
+        if v = "" || v = "–" || seen.Has(v)
+            continue
+        seen[v] := 1
+        out.Push(v)
+    }
+    return out
+}
+
+; @summary True when any filter (text, Program or Action) is on.
+; @tags grid, filter, v27
+V27_FilterOn() {
+    s := VMB()
+    return Trim(s.FilterQ) != "" || s.FilterProg != "" || s.FilterAct != ""
+}
+
+; @summary Fills the Program / Action drop-downs from the current rows (All + each one). A choice that is no longer
+;          in the rows goes back to All.
 ; @tags grid, filter, v27
 V27_BarLists() {
+    s := VMB()
+    b := s.GridBar
+    if !(b is Map) || !b.Has("Prog")
+        return
+    s.BarSync := true
+    for it in [["Prog", "app", "All programs"], ["Act", "action", "All actions"]] {
+        items := V27_Distinct(s.GridAll, it[2])
+        cur := it[1] = "Prog" ? s.FilterProg : s.FilterAct
+        pick := 1
+        for i, v in items
+            if v = cur
+                pick := i + 1
+        if pick = 1 && cur != "" {
+            if it[1] = "Prog"
+                s.FilterProg := ""
+            else
+                s.FilterAct := ""
+        }
+        b[it[1]].Delete()
+        items.InsertAt(1, it[3])
+        b[it[1]].Add(items)
+        b[it[1]].Choose(pick)
+    }
+    s.BarSync := false
+}
+
+; @summary Typing in the filter box.
+; @tags grid, filter, v27
+V27_OnFilter(ctl, *) {
+    s := VMB()
+    if s.BarSync
+        return
+    s.FilterQ := ctl.Value
+    V27_Refill()
+}
+
+; @summary A choice in the Program or Action drop-down.
+; @tags grid, filter, v27
+V27_OnPick(ctl, *) {
+    s := VMB()
+    b := s.GridBar
+    if s.BarSync
+        return
+    s.FilterProg := b["Prog"].Value > 1 ? b["Prog"].Text : ""
+    s.FilterAct := b["Act"].Value > 1 ? b["Act"].Text : ""
+    V27_Refill()
+}
+
+; @summary "Clear" button: no filter text, Program and Action back to All (the sort stays).
+; @tags grid, filter, v27
+V27_ClearFilter(refill := true) {
+    s := VMB()
+    s.FilterQ := "", s.FilterProg := "", s.FilterAct := ""
+    b := s.GridBar
+    if b is Map && b.Has("Filter") {
+        s.BarSync := true
+        b["Filter"].Value := ""
+        b["Prog"].Choose(1)
+        b["Act"].Choose(1)
+        s.BarSync := false
+    }
+    if refill
+        V27_Refill()
+}
+
+; @summary A run starts: the filter is cleared so the running step can never be hidden; it is put back by V27_RunEnd.
+; @tags grid, filter, v27
+V27_RunStart() {
+    s := VMB()
+    s.SavedFilter := V27_FilterOn() ? Map("Q", s.FilterQ, "Prog", s.FilterProg, "Act", s.FilterAct) : 0
+    if !s.SavedFilter
+        return
+    V27_ClearFilter(false)
+    if s.View = "grid"
+        V27_FillGrid()
+}
+
+; @summary The run is over: put the filter back as it was before the run.
+; @tags grid, filter, v27
+V27_RunEnd() {
+    s := VMB()
+    saved := s.SavedFilter
+    s.SavedFilter := 0
+    if !(saved is Map) || !s.GridLV
+        return
+    s.FilterQ := saved["Q"], s.FilterProg := saved["Prog"], s.FilterAct := saved["Act"]
+    b := s.GridBar
+    if b is Map && b.Has("Filter") {
+        s.BarSync := true
+        b["Filter"].Value := saved["Q"]
+        s.BarSync := false
+    }
+    if s.View = "grid"
+        V27_FillGrid()              ; rebuilds the drop-downs and selects the Program / Action choice again
 }
 
 ; ============================================================================
@@ -17401,6 +17602,29 @@ V4_SelfTest(path) {
         check("V27 sort: input array untouched", v27R[1]["num"] . v27R.Length, "15")
         check("V27 sort: empty and one row", V27_SortRows([], "x", false, true).Length . V27_SortRows([v27R[1]], "x", true, true).Length, "01")
         check("V27 sort: text compare ignores case", V27_SortRows([Map("app", "b"), Map("app", "A")], "app", false, false)[1]["app"], "A")
+        ; V27 item D: filter
+        v27F := [Map("num", 1, "app", "notepad", "action", "Click", "text", "–", "note", "save it"), Map("num", 2, "app", "chrome", "action", "Type", "text", "hello Notepad", "note", "–"),
+            Map("num", 3, "app", "chrome", "action", "Double-click", "text", "–", "note", "–")]
+        v27Out := ""
+        for v27Row in V27_FilterRows(v27F, "notepad", v27Cols)
+            v27Out .= v27Row["num"] . ","
+        check("V27 filter: any cell, case-insensitive", v27Out, "1,2,")
+        v27Out := ""
+        for v27Row in V27_FilterRows(v27F, "program:notepad", v27Cols)
+            v27Out .= v27Row["num"] . ","
+        check("V27 filter: program:notepad limits to that column", v27Out, "1,")
+        v27Out := ""
+        for v27Row in V27_FilterRows(v27F, "action:click chrome", v27Cols)
+            v27Out .= v27Row["num"] . ","
+        check("V27 filter: several words must all match (action:click + chrome)", v27Out, "3,")
+        check("V27 filter: column key works too", V27_FilterRows(v27F, "app:chrome", v27Cols).Length, 2)
+        check("V27 filter: empty text = all rows (a new array)", V27_FilterRows(v27F, "  ", v27Cols).Length . (V27_FilterRows(v27F, "", v27Cols) != v27F), "31")
+        check("V27 filter: 'program:' with no word yet shows all", V27_FilterRows(v27F, "program:", v27Cols).Length, 3)
+        check("V27 filter: unknown column is plain text (no match)", V27_FilterRows(v27F, "foo:bar", v27Cols).Length, 0)
+        check("V27 filter: nothing matches", V27_FilterRows(v27F, "zzz", v27Cols).Length, 0)
+        check("V27 pick: exact program", V27_PickRows(v27F, "app", "CHROME").Length, 2)
+        check("V27 distinct: no dash, first-seen order", V4_Join(V27_Distinct(v27F, "note"), "|"), "save it")
+        check("V27 distinct: programs", V4_Join(V27_Distinct(v27F, "app"), "|"), "notepad|chrome")
         ; V27 check this PC (scroll test in a helper program)
         check("V27 helper: has a list box and a multi-line text box", InStr(V27_ScrollHelperText(), "ListBox") > 0 && InStr(V27_ScrollHelperText(), "Multi") > 0, true)
         check("V27 helper: 300 rows and 300 lines", InStr(V27_ScrollHelperText(), "loop 300") > 0, true)
