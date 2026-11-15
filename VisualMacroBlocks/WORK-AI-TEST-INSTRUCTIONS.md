@@ -1,8 +1,26 @@
-# Instructions for the AI on the Windows PC: test Visual Macro Blocks V33
+# Instructions for the AI on the Windows PC: test Visual Macro Blocks V34
 
 You are testing a program on a real Windows PC because the people who built it only had Linux (Wine). Your job is to
 run the checks below, write down exactly what happened, and hand back one results file. You are a tester, not a
 developer: **do not change the script.** If something fails, record it and go on.
+
+## Retest after V34 (do these first, then the rest; same folder and safety rules as below)
+The first PC test found 8 problems; V34 changes the program for them. Please report:
+1. **Part 2 steps 5-10, with TEN replays** (not three): after recording, play the macro ten times, clearing Notepad's text
+   before each play. Report "n of 10 identical" (text `X` / `world`), and the exact status text of every play that differs.
+   Also note how long one play takes (V34 waits at least 0.12 s between typing / click steps; setting `minStepMs`).
+2. **5.13** right-click on a column title (e.g. Action) with the editor window NOT at the top-left of the screen: the column menu must open
+   under the mouse. Also click the **?** button: its menu must open just under the button.
+3. **Maximize / Restore naming**: record a click on Notepad's Maximize button, then on the same spot again (now Restore). Expected rows
+   "the Maximize button" then "the Restore button" (Minimize and Close likewise). Report what the grid says for each.
+4. **Fast typing + Enter in a cell**: double-click a Text cell, type `there` and press Enter at once (the harness may send them with no
+   pause). The cell must hold `there`; try also a Waits first cell with `2`. Report 5 tries.
+5. **"Ready to play?" with Notepad closed in Easy mode**: record a Notepad macro, close Notepad, press Play in Easy mode. The box
+   "Ready to play?" must appear and name Notepad. Answer **No** (do not play it).
+6. **Unsaved changes**: change a Text cell (title shows `*`), close the editor with the X button (it hides to the tray, nothing is asked),
+   end the script (tray menu or Ctrl+Shift+X), start it again. The title should show `*` again and the status bar should say
+   "Restored your unsaved changes ...". Report what you saw.
+
 
 ## Where you may write files (the first version of this document got this wrong - follow it exactly)
 - EVERYTHING you create goes into ONE local folder: `C:\Temp\vmb\` (create it). That means the script copy, the
@@ -32,9 +50,9 @@ developer: **do not change the script.** If something fails, record it and go on
 7. If the mouse or keyboard starts doing something you did not expect, press Esc, then Ctrl+Shift+X, and write it down.
 
 ## What you need
-- The file `VisualMacroBlocks-makecode-telek-V33-cells.ahk2` (same folder as this document in the repository
+- The file `VisualMacroBlocks-makecode-telek-V34-pcfixes.ahk2` (same folder as this document in the repository
   `telb2016/AutoHotkey-bat-fk`, branch `claude/recording-process-consistency-e3nt05`, folder `VisualMacroBlocks`).
-  Save a copy as `C:\Users\VHACLETelekB\Downloads\vmb-test\VMB33.ahk` (the `.ahk` ending matters).
+  Save a copy as `C:\Users\VHACLETelekB\Downloads\vmb-test\VMB34.ahk` (the `.ahk` ending matters).
 - **AutoHotkey v2.0.19 or newer, 64-bit** (`AutoHotkey64.exe`). Write down the exact version and that it is 64-bit.
   On this PC it is NOT in Program Files; use
   `C:\Users\VHACLETelekB\repos\pharmacy-informatics-CLE-testing\AutoHotkey\v2\AutoHotkey64.exe` (2.0.19, 64-bit).
@@ -42,11 +60,11 @@ developer: **do not change the script.** If something fails, record it and go on
 
 ## Part 1 - automatic checks (5 minutes, no judgement needed)
 1. Self-test. Run:
-   `"C:\Users\VHACLETelekB\repos\pharmacy-informatics-CLE-testing\AutoHotkey\v2\AutoHotkey64.exe" "C:\Users\VHACLETelekB\Downloads\vmb-test\VMB33.ahk" --self-test "C:\Users\VHACLETelekB\Downloads\vmb-test\selftest.txt"`
+   `"C:\Users\VHACLETelekB\repos\pharmacy-informatics-CLE-testing\AutoHotkey\v2\AutoHotkey64.exe" "C:\Users\VHACLETelekB\Downloads\vmb-test\VMB34.ahk" --self-test "C:\Users\VHACLETelekB\Downloads\vmb-test\selftest.txt"`
    Open `selftest.txt`. Report the last line (`Failures: N`), the number of lines starting with `PASS`, and every line
-   that does NOT start with `PASS`. Expected: `Failures: 0`, 948 PASS. The self-test writes only to
+   that does NOT start with `PASS`. Expected: `Failures: 0`, 999 PASS. The self-test writes only to
    `Downloads\vmb-selftest\` and deletes it at the end; report it if that folder is still there afterwards.
-2. Start the program normally (run `VMB33.ahk` with the AutoHotkey64.exe above). Report any error or warning box, word for word.
+2. Start the program normally (run `VMB34.ahk` with the AutoHotkey64.exe above). Report any error or warning box, word for word.
 3. Click the **?** button -> **Check this PC**. When the result window appears, click **Copy** and paste the whole text
    into your results file. (Already seen once on this PC: all PASS except a "Fonts" CHECK - that one is known.)
 
