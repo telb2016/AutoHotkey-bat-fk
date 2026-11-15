@@ -683,6 +683,8 @@ VMB_OnCustomDraw(ctl, lParam) {
     if state & 0x1
         return 0
     colors := (ctl = s.Pal ? s.PalColor : s.ItemColor).Get(item, 0)
+    if ctl = s.Pal
+        colors := V31_PalColors(s.PlainList, colors)      ; V31: the toolbox is plain too (black on white) while the step list is
     if !colors
         return 0
     NumPut("UInt", colors[1], "UInt", colors[2], lParam, off)
@@ -14910,6 +14912,8 @@ V23_ToggleColoured(*) {
     s.PlainList := s.PlainList ? 0 : 1
     IniWrite(s.PlainList, s.Ini, "V23", "PlainList")
     VMB_Refresh()
+    if s.Pal
+        DllCall("InvalidateRect", "Ptr", s.Pal.Hwnd, "Ptr", 0, "Int", 1)      ; V31: the toolbox follows the same switch
 }
 
 ; ============================================================================
@@ -19580,6 +19584,15 @@ V31_StreakSummary(total, seen, skipped) {
     return "Stopped after row " . seen . " of " . total . ": " . Max(0, seen - bad) . " done, " . bad . " skipped (row" . (bad > 1 ? "s " : " ") . rowsList . "). " . V31_StreakSentence()
 }
 
+; ----------------------------------------------------------------------------
+; V31: the Blocks toolbox is plain like the step list
+; ----------------------------------------------------------------------------
+
+; @summary The colours the toolbox paints for an entry: 0 (system default, black on white) while the plain list is on,
+;          else the entry's own colours.
+; @tags macro, gui, colors, v31
+V31_PalColors(plain, colors) => plain ? 0 : colors
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -21195,6 +21208,7 @@ V4_SelfTest(path) {
         v31R := V4Runner(v31Old, {Data: V30_ListData(Map("list", V30_NewList(v31H, [["a", "x"], ["b", "x"], ["c", "x"], ["d", "x"]])))})
         v31R.Run(v31Old["blocks"])
         check("V31 old hand-made For each block: no stop after 3 bad rows (V30 flag only)", v31R.Skipped . "|" . v31R.StopNote, "4|")
+        check("V31 toolbox colours: plain = none, coloured = the entry's own", V31_PalColors(1, [1, 2]) . "|" . V31_PalColors(0, [1, 2])[2] . "|" . V31_PalColors(0, 0), "0|2|0")
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
