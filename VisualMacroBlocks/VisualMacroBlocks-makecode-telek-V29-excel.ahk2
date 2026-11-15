@@ -213,6 +213,12 @@ Tab::V28_Enter("tab")
 +Tab::V28_Enter("back")
 Esc::V28_EscKey()
 #HotIf V27_GridFocused()
+Home::V29_Jump("first")
+End::V29_Jump("last")
+^Home::V29_Jump("top")
+^End::V29_Jump("bottom")
+Tab::V29_TabKey(1)
++Tab::V29_TabKey(-1)
 ^=::V29_ZoomKey(1)
 ^NumpadAdd::V29_ZoomKey(1)
 ^-::V29_ZoomKey(-1)
@@ -15988,12 +15994,15 @@ V27_ShowNode(node, propagate := false) {
     s.GridSync := !propagate
     try s.GridLV.Modify(s.GridRowOf[node], "Select Focus Vis")
     s.GridSync := false
+    V29_CursorRedraw()
 }
 
 ; @summary Grid row selected: select the same step in the (hidden) tree so every button keeps working.
 ; @tags grid, gui, v27
 V27_OnSelect(lv, row, selected) {
     s := VMB()
+    if selected
+        V29_CursorRedraw()                                     ; V29: name box follows the selected row
     if !selected || s.GridSync || !row
         return
     node := s.GridNodes.Get(row, 0)
@@ -16209,6 +16218,12 @@ V27_PlaceBar(x, y, w, h, show) {
     }
     for name, ctl in b
         ctl.Visible := show && (name != "Name" || nameOn)
+    if show && s.Gui {                                          ; V29: repaint the whole row, so no stale picture of a control stays where it used to be
+        f := A_ScreenDPI / 96
+        rc := Buffer(16, 0)
+        NumPut("Int", Round(x * f), "Int", Round(y * f), "Int", Round((x + w + 8) * f), "Int", Round((y + h + 4) * f), rc)
+        DllCall("RedrawWindow", "Ptr", s.Gui.Hwnd, "Ptr", rc, "Ptr", 0, "UInt", 0x185)
+    }
 }
 
 ; ----------------------------------------------------------------------------
@@ -16850,6 +16865,7 @@ V28_Open(row, col, startText := "") {
     key := cols[col].Key
     kind := V28_Editable(node, key)
     s.GridCol := col
+    V29_CursorRedraw()
     if kind = "" {
         VMB_Status(V28_NotEditableText())
         return false
@@ -17049,7 +17065,7 @@ V28_OpenCurrent() {
 V28_MoveCol(step) {
     s := VMB()
     cols := V27_Columns()
-    s.GridCol := Max(1, Min(cols.Length, s.GridCol + step))
+    s.GridCol := V29_NextCol(V29_VisibleOrder(), s.GridCol, step)      ; V29: in the order the columns are shown, hidden ones skipped
     row := s.GridLV.GetNext(0)
     if row
         V28_EnsureVisible(row, s.GridCol)
@@ -17064,6 +17080,7 @@ V28_CellStatus(row) {
     node := row ? s.GridNodes.Get(row, 0) : 0
     can := IsObject(node) && V28_Editable(node, col.Key) != ""
     VMB_Status("Cell: " . col.Title . (can ? "   (F2 or Enter edits it)" : "   (worked out from the step, not editable here)"))
+    V29_CursorRedraw()                                         ; V29: the cell frame and the name box follow
 }
 
 ; @summary Click in the grid: the clicked column becomes the current column.
@@ -17246,6 +17263,7 @@ V29_ColWidth(w100, pct) => w100 <= 0 ? 0 : Max(8, Round(w100 * pct / 100))
 V29_Build(g) {
     s := VMB()
     OnMessage(0x20A, V29_OnWmWheel)                            ; WM_MOUSEWHEEL: Ctrl + wheel over the grid zooms it
+    s.GridLV.OnNotify(-12, V29_OnCustomDraw)                   ; NM_CUSTOMDRAW: the cell cursor
     V29_ZoomLabel()
 }
 
@@ -17354,7 +17372,177 @@ V29_LoadCols() {
 }
 V29_SaveCols() {
 }
+
+; ----------------------------------------------------------------------------
+; V29 item B: a cell cursor, like Excel's selected cell
+; ----------------------------------------------------------------------------
+
+; @summary Next / previous column in a display order (array of column numbers, left to right, hidden ones already left out).
+;          step 1 = right, -1 = left. At the edge it stays where it is (no wrap). A current column that is not in the order
+;          (for example a hidden one) goes to the first (step 1) or the last (step -1) shown column.
+; @returns Integer column number
+; @tags grid, cursor, columns, v29
+V29_NextCol(order, current, step) {
+    if !order.Length
+        return current
+    pos := 0
+    for i, c in order
+        if c = current {
+            pos := i
+            break
+        }
+    if !pos
+        return step > 0 ? order[1] : order[order.Length]
+    return order[Max(1, Min(order.Length, pos + step))]
+}
+
+; @summary The columns as the user sees them, left to right: column numbers (1-based, the numbers of V27_Columns), hidden ones left out.
+;          Read from the grid (LVM_GETCOLUMNORDERARRAY) so a dragged column is respected.
+; @returns Array of Integer
+; @tags grid, cursor, columns, v29
+V29_VisibleOrder() {
+    s := VMB()
+    cols := V27_Columns()
+    all := []
+    if s.GridLV {
+        buf := Buffer(4 * cols.Length, 0)
+        if SendMessage(0x103B, cols.Length, buf.Ptr, s.GridLV)          ; LVM_GETCOLUMNORDERARRAY
+            loop cols.Length
+                all.Push(NumGet(buf, 4 * (A_Index - 1), "Int") + 1)
+    }
+    if all.Length != cols.Length {
+        all := []
+        loop cols.Length
+            all.Push(A_Index)
+    }
+    out := []
+    for c in all
+        if !s.GridHidden.Has(cols[c].Key)
+            out.Push(c)
+    return out
+}
+
+; @summary The text of the name box: the current column and the step number, like "Waits first · step 7". "-" when no row is selected.
+; @tags grid, cursor, gui, v29
+V29_NameText(colTitle, stepNum) => colTitle = "" || stepNum = "" ? "–" : colTitle . " · step " . stepNum
+
+; @summary Repaints the row that holds the cell cursor and updates the name box. Safe without a grid.
+; @tags grid, cursor, gui, v29
 V29_CursorRedraw() {
+    s := VMB()
+    if !s.GridLV
+        return
+    row := s.GridLV.GetNext(0)
+    if row
+        SendMessage(0x1015, row - 1, row - 1, s.GridLV)          ; LVM_REDRAWITEMS: the old column's frame goes, the new one is drawn
+    if s.GridBar is Map && s.GridBar.Has("Name") {
+        cols := V27_Columns()
+        num := row ? s.GridLV.GetText(row, 1) : ""
+        s.GridBar["Name"].Value := V29_NameText(row && s.GridCol >= 1 && s.GridCol <= cols.Length ? cols[s.GridCol].Title : "", num)
+    }
+}
+
+; @summary The pixel rectangle of the cell cursor in the grid's own client pixels: {L, T, R, B}, or 0. The first column's
+;          rectangle is cut to the column's width (the list gives the whole row for the first column).
+; @tags grid, cursor, gui, v29
+V29_CursorRect(row, col) {
+    s := VMB()
+    rc := Buffer(16, 0)
+    NumPut("Int", col = 1 ? 2 : 0, "Int", col - 1, rc)           ; LVIR_LABEL for the first column, LVIR_BOUNDS for the others
+    if !SendMessage(0x1038, row - 1, rc.Ptr, s.GridLV)           ; LVM_GETSUBITEMRECT
+        return 0
+    L := NumGet(rc, 0, "Int"), T := NumGet(rc, 4, "Int"), R := NumGet(rc, 8, "Int"), B := NumGet(rc, 12, "Int")
+    wide := SendMessage(0x101D, col - 1, 0, s.GridLV)            ; LVM_GETCOLUMNWIDTH
+    if wide > 0 && (col = 1 || R - L > wide)
+        R := L + wide
+    return R > L ? {L: L, T: T, R: R, B: B} : 0
+}
+
+; @summary Draws the 2 px dark-green frame (Excel's 0x217346) inside a cell rectangle on a device context.
+; @tags grid, cursor, gui, v29
+V29_DrawFrame(hdc, p) {
+    pen := DllCall("CreatePen", "Int", 6, "Int", 2, "UInt", 0x467321, "Ptr")          ; PS_INSIDEFRAME, 2 px, RGB 21 73 46 as BGR
+    oldPen := DllCall("SelectObject", "Ptr", hdc, "Ptr", pen, "Ptr")
+    oldBrush := DllCall("SelectObject", "Ptr", hdc, "Ptr", DllCall("GetStockObject", "Int", 5, "Ptr"), "Ptr")    ; NULL_BRUSH: frame only
+    DllCall("Rectangle", "Ptr", hdc, "Int", p.L, "Int", p.T, "Int", p.R, "Int", p.B)
+    DllCall("SelectObject", "Ptr", hdc, "Ptr", oldBrush)
+    DllCall("SelectObject", "Ptr", hdc, "Ptr", oldPen)
+    DllCall("DeleteObject", "Ptr", pen)
+}
+
+; @summary NM_CUSTOMDRAW of the grid: asks for the sub-item paint of the selected row only, and after the current column's
+;          cell is painted draws the cell frame on it. Other rows are left to the list (no cost).
+; @tags grid, cursor, gui, v29
+V29_OnCustomDraw(ctl, lParam) {
+    s := VMB()
+    stage := NumGet(lParam, 24, "UInt")                          ; NMCUSTOMDRAW.dwDrawStage
+    if stage = 1 {                                               ; CDDS_PREPAINT
+        s.CurCell := s.View = "grid" ? s.GridLV.GetNext(0) : 0
+        return s.CurCell ? 0x20 : 0                              ; CDRF_NOTIFYITEMDRAW
+    }
+    row := NumGet(lParam, 56, "Ptr") + 1                         ; dwItemSpec = item index
+    if stage = 0x10001                                           ; CDDS_ITEMPREPAINT
+        return row = s.CurCell ? 0x20 : 0                        ; CDRF_NOTIFYSUBITEMDRAW: only for the selected row
+    if row != s.CurCell
+        return 0
+    sub := NumGet(lParam, 88, "Int")                             ; NMLVCUSTOMDRAW.iSubItem
+    if stage = 0x30001                                           ; CDDS_ITEMPREPAINT | CDDS_SUBITEM
+        return sub = s.GridCol - 1 ? 0x10 : 0                    ; CDRF_NOTIFYPOSTPAINT for the current column only
+    if stage = 0x30002 {                                         ; CDDS_ITEMPOSTPAINT | CDDS_SUBITEM
+        p := V29_CursorRect(row, sub + 1)
+        if IsObject(p)
+            V29_DrawFrame(NumGet(lParam, 32, "Ptr"), p)
+    }
+    return 0
+}
+
+; @summary Moves the cell cursor to a column (and scrolls it into view); the status bar and name box say where it is.
+; @tags grid, cursor, gui, v29
+V29_GoCol(col) {
+    s := VMB()
+    s.GridCol := col
+    row := s.GridLV.GetNext(0)
+    if row
+        V28_EnsureVisible(row, col)
+    V28_CellStatus(row)
+}
+
+; @summary Home / End in the grid: the first / last shown column of the row (Excel). Ctrl+Home / Ctrl+End: also the first / last row.
+;          which = "first", "last", "top" (first row, first column) or "bottom" (last row, last column).
+; @tags grid, cursor, hotkey, v29
+V29_Jump(which) {
+    s := VMB()
+    order := V29_VisibleOrder()
+    if !order.Length || !s.GridNodes.Count
+        return
+    col := (which = "first" || which = "top") ? order[1] : order[order.Length]
+    if which = "top"
+        V28_SelectRow(1)
+    else if which = "bottom"
+        V28_SelectRow(s.GridNodes.Count)
+    V29_GoCol(col)
+}
+
+; @summary Tab / Shift+Tab in the grid (not editing): one cell right / left; at the end of a row on to the next row's first
+;          shown cell (back: the previous row's last). Stays put on the very first / last cell.
+; @tags grid, cursor, hotkey, v29
+V29_TabKey(step) {
+    s := VMB()
+    order := V29_VisibleOrder()
+    row := s.GridLV.GetNext(0)
+    if !order.Length || !row
+        return
+    next := V29_NextCol(order, s.GridCol, step)
+    if next = s.GridCol {                                        ; at the end of the row: on to the next / previous row
+        if step > 0 && row < s.GridNodes.Count {
+            V28_SelectRow(row + 1)
+            next := order[1]
+        } else if step < 0 && row > 1 {
+            V28_SelectRow(row - 1)
+            next := order[order.Length]
+        }
+    }
+    V29_GoCol(next)
 }
 
 ; ============================================================================
@@ -18771,6 +18959,14 @@ V4_SelfTest(path) {
         check("V29 zoom clamp: 10 is 50, 500 is 200, text is 100, 149.6 is 150", V29_ClampZoom(10) . "," . V29_ClampZoom(500) . "," . V29_ClampZoom("abc") . "," . V29_ClampZoom(149.6) . "," . V29_ClampZoom("120"), "50,200,100,150,120")
         check("V29 column width: 220 px at 150 % is 330, at 70 % is 154; 40 px at 50 % is 20; 0 stays 0", V29_ColWidth(220, 150) . "," . V29_ColWidth(220, 70) . "," . V29_ColWidth(40, 50) . "," . V29_ColWidth(0, 150), "330,154,20,0")
         check("V29 zoom: the zoom control is not in the Easy / Full layout list", VMB().Ctl.Has("ZPct") || VMB().Ctl.Has("ZPlus"), false)
+        ; V29 item B: cell cursor
+        check("V29 next col: right and left in a display order", V29_NextCol([1, 3, 2, 4], 3, 1) . "," . V29_NextCol([1, 3, 2, 4], 3, -1) . "," . V29_NextCol([1, 3, 2, 4], 2, -1), "2,1,3")
+        check("V29 next col: stays at the edges", V29_NextCol([1, 3, 2, 4], 4, 1) . "," . V29_NextCol([1, 3, 2, 4], 1, -1), "4,1")
+        check("V29 next col: a column that is not shown goes to the first / last shown", V29_NextCol([2, 5, 7], 3, 1) . "," . V29_NextCol([2, 5, 7], 3, -1), "2,7")
+        check("V29 next col: empty order and one column", V29_NextCol([], 4, 1) . "," . V29_NextCol([6], 6, 1) . "," . V29_NextCol([6], 6, -1), "4,6,6")
+        check("V29 name box text", V29_NameText("Waits first", 7) . "|" . V29_NameText("", 3) . "|" . V29_NameText("Note", ""), "Waits first · step 7|–|–")
+        check("V29 cursor: redraw and rectangle work without a grid", V29_CursorRedraw(), "")
+        check("V29 visible order without a grid is every column in order", V29_VisibleOrder().Length, V27_Columns().Length)
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
