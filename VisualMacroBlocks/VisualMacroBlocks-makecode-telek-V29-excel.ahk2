@@ -3629,6 +3629,7 @@ VMB_PanicExit() {
 ; @summary OnExit: removes hooks and releases any modifier keys left logically down.
 ; @tags macro, safety
 VMB_OnExit(*) {
+    try V29_SaveCols()
     try VM_RecordStop()
     VM_ReleaseStuckModifiers()
     try V4_Disconnect()
@@ -15911,6 +15912,7 @@ V27_SetView(view) {
     if s.View = view
         return
     V28_Cancel(false)
+    V29_SaveCols()
     node := V27_SelectedNode()
     s.View := view
     IniWrite(view, s.Ini, "V27", "View")
@@ -15972,6 +15974,8 @@ V27_FillGrid(rows := "") {
         s.GridSized := true
         capped := Map("text", 1, "target", 1, "inside", 1, "note", 1, "lastrun", 1)
         for i, col in cols {
+            if s.GridHidden.Has(col.Key)                        ; V29: a hidden column stays hidden
+                continue
             lv.ModifyCol(i, "AutoHdr")
             wide := SendMessage(0x101D, i - 1, 0, lv)           ; LVM_GETCOLUMNWIDTH
             if wide < col.Width                                 ; never narrower than the start width
@@ -16032,6 +16036,8 @@ V27_OnDoubleClick(lv, row) {
 ; @tags grid, gui, v27
 V27_OnMenu(lv, row, isRight, x, y) {
     s := VMB()
+    if V29_OnHeader(x, y)                          ; V29: right-click on the column heading = hide / show columns
+        return V29_ColMenu(x, y)
     node := row ? s.GridNodes.Get(row, 0) : 0
     if IsObject(node) && s.NodeItem.Has(node) {
         s.GridSync := true
@@ -17016,15 +17022,23 @@ V28_Enter(where) {
         return
     }
     step := where = "back" ? -1 : 1
-    r := row, c := col
-    loop cols.Length * 2 {                                       ; at most one full turn of the row, then the next / previous row
-        c += step
-        if c > cols.Length || c < 1 {
+    order := V29_VisibleOrder()                                  ; V29: in the order the columns are shown, hidden ones skipped
+    pos := 0
+    for i, oc in order
+        if oc = col
+            pos := i
+    if !pos
+        pos := step > 0 ? 0 : order.Length + 1
+    r := row
+    loop order.Length * 2 + 2 {                                  ; at most one full turn of the row, then the next / previous row
+        pos += step
+        if pos > order.Length || pos < 1 {
             r += step
-            c := step > 0 ? 1 : cols.Length
+            pos := step > 0 ? 1 : order.Length
             if r < 1 || r > s.GridNodes.Count
                 return
         }
+        c := order[pos]
         if V28_Editable(s.GridNodes[r], cols[c].Key) != "" {
             V28_SelectRow(r)
             V28_Open(r, c)
@@ -17267,6 +17281,8 @@ V29_Build(g) {
     s := VMB()
     OnMessage(0x20A, V29_OnWmWheel)                            ; WM_MOUSEWHEEL: Ctrl + wheel over the grid zooms it
     s.GridLV.OnNotify(-12, V29_OnCustomDraw)                   ; NM_CUSTOMDRAW: the cell cursor
+    s.GridLV.OnEvent("LoseFocus", (*) => V29_SaveCols())       ; widths / order are saved when the grid is left
+    g.OnEvent("ContextMenu", V29_OnGuiMenu)                    ; right-click on the column heading: hide / show columns
     V29_ZoomLabel()
 }
 
@@ -17370,11 +17386,6 @@ V29_OnWmWheel(wParam, lParam, msg, hwnd) {
 ; @tags grid, hotkey, v29
 V29_GridKeys(*) => V27_GridFocused()
 
-; The cell cursor, copy / paste and column functions are filled in by the next items.
-V29_LoadCols() {
-}
-V29_SaveCols() {
-}
 
 ; ----------------------------------------------------------------------------
 ; V29 item B: a cell cursor, like Excel's selected cell
@@ -17406,20 +17417,8 @@ V29_NextCol(order, current, step) {
 V29_VisibleOrder() {
     s := VMB()
     cols := V27_Columns()
-    all := []
-    if s.GridLV {
-        buf := Buffer(4 * cols.Length, 0)
-        if SendMessage(0x103B, cols.Length, buf.Ptr, s.GridLV)          ; LVM_GETCOLUMNORDERARRAY
-            loop cols.Length
-                all.Push(NumGet(buf, 4 * (A_Index - 1), "Int") + 1)
-    }
-    if all.Length != cols.Length {
-        all := []
-        loop cols.Length
-            all.Push(A_Index)
-    }
     out := []
-    for c in all
+    for c in V29_DisplayOrder()
         if !s.GridHidden.Has(cols[c].Key)
             out.Push(c)
     return out
@@ -17628,6 +17627,271 @@ V29_CutCell() {
         return VMB_Status(cur.Title . " is already empty, nothing to cut.")
     A_Clipboard := V29_CopyText(cur.Node, cur.Key, "")
     V28_DeleteCell()
+}
+
+; ----------------------------------------------------------------------------
+; V29 item D: columns behave like Excel columns (drag a header to reorder, widths and order remembered, hide / show)
+; ----------------------------------------------------------------------------
+
+; @summary Reads "key=width,key=width" (the ini text) into a Map key -> width. Unknown keys, widths under 8 or over 3000 and
+;          text that is not a number are skipped.
+; @returns Map
+; @tags grid, columns, v29
+V29_ParseColW(text, cols) {
+    known := Map()
+    for col in cols
+        known[col.Key] := 1
+    out := Map()
+    for part in StrSplit(String(text), ",") {
+        kv := StrSplit(Trim(part), "=")
+        if kv.Length = 2 && known.Has(Trim(kv[1])) && IsInteger(Trim(kv[2])) && Integer(Trim(kv[2])) >= 8 && Integer(Trim(kv[2])) <= 3000
+            out[Trim(kv[1])] := Integer(Trim(kv[2]))
+    }
+    return out
+}
+
+; @summary The widths Map as ini text, in column order. Only keys that are in the Map.
+; @returns String
+; @tags grid, columns, v29
+V29_ColWText(widths, cols) {
+    parts := []
+    for col in cols
+        if widths.Has(col.Key)
+            parts.Push(col.Key . "=" . widths[col.Key])
+    return V4_Join(parts, ",")
+}
+
+; @summary Reads a saved column order (keys, comma separated) into column numbers, left to right. Unknown and repeated keys are
+;          skipped; columns that are not in the text (a newer version added them) go to the end in their normal order.
+;          Always returns every column once.
+; @returns Array of Integer
+; @tags grid, columns, v29
+V29_ParseOrder(text, cols) {
+    pos := Map()
+    for i, col in cols
+        pos[col.Key] := i
+    out := [], used := Map()
+    for part in StrSplit(String(text), ",") {
+        key := Trim(part)
+        if pos.Has(key) && !used.Has(key) {
+            out.Push(pos[key])
+            used[key] := 1
+        }
+    }
+    for i, col in cols
+        if !used.Has(col.Key)
+            out.Push(i)
+    return out
+}
+
+; @summary A column order (column numbers, left to right) as ini text (keys, comma separated).
+; @returns String
+; @tags grid, columns, v29
+V29_OrderText(order, cols) {
+    parts := []
+    for c in order
+        if c >= 1 && c <= cols.Length
+            parts.Push(cols[c].Key)
+    return V4_Join(parts, ",")
+}
+
+; @summary Reads the saved hidden columns (keys, comma separated) into a Map key -> 1. Unknown keys are skipped.
+;          When the text would hide every column, nothing is hidden (the grid is never empty).
+; @returns Map
+; @tags grid, columns, v29
+V29_ParseHidden(text, cols) {
+    known := Map()
+    for col in cols
+        known[col.Key] := 1
+    out := Map()
+    for part in StrSplit(String(text), ",")
+        if known.Has(Trim(part))
+            out[Trim(part)] := 1
+    return out.Count >= cols.Length ? Map() : out
+}
+
+; @summary The hidden columns as ini text, in column order.
+; @returns String
+; @tags grid, columns, v29
+V29_HiddenText(hidden, cols) {
+    parts := []
+    for col in cols
+        if hidden.Has(col.Key)
+            parts.Push(col.Key)
+    return V4_Join(parts, ",")
+}
+
+; @summary Every column in the order the user sees them, left to right (hidden ones included): column numbers, 1-based.
+;          Read from the grid (LVM_GETCOLUMNORDERARRAY). Without a grid: the normal order.
+; @returns Array of Integer
+; @tags grid, columns, v29
+V29_DisplayOrder() {
+    s := VMB()
+    n := V27_Columns().Length
+    all := []
+    if s.GridLV {
+        buf := Buffer(4 * n, 0)
+        if SendMessage(0x103B, n, buf.Ptr, s.GridLV)             ; LVM_GETCOLUMNORDERARRAY
+            loop n
+                all.Push(NumGet(buf, 4 * (A_Index - 1), "Int") + 1)
+    }
+    if all.Length != n {
+        all := []
+        loop n
+            all.Push(A_Index)
+    }
+    return all
+}
+
+; @summary Puts the grid's columns in an order (array of column numbers, left to right).
+; @tags grid, columns, gui, v29
+V29_SetOrder(order) {
+    s := VMB()
+    if !s.GridLV || order.Length != V27_Columns().Length
+        return
+    buf := Buffer(4 * order.Length, 0)
+    for i, c in order
+        NumPut("Int", c - 1, buf, 4 * (i - 1))
+    SendMessage(0x103A, order.Length, buf.Ptr, s.GridLV)         ; LVM_SETCOLUMNORDERARRAY
+    DllCall("InvalidateRect", "Ptr", s.GridLV.Hwnd, "Ptr", 0, "Int", 1)
+}
+
+; @summary At start: widths, order and hidden columns from the ini ([V29] ColW, ColOrder, ColHidden). Saved widths mean the grid
+;          is not fitted to its content again.
+; @tags grid, columns, v29
+V29_LoadCols() {
+    s := VMB()
+    cols := V27_Columns()
+    s.GridColW := V29_ParseColW(IniRead(s.Ini, "V29", "ColW", ""), cols)
+    s.GridHidden := V29_ParseHidden(IniRead(s.Ini, "V29", "ColHidden", ""), cols)
+    saved := IniRead(s.Ini, "V29", "ColOrder", "")
+    if s.GridColW.Count
+        s.GridSized := true
+    if saved != ""
+        V29_SetOrder(V29_ParseOrder(saved, cols))
+    s.ColsSaved := V29_ColWText(s.GridColW, cols) . "|" . V29_OrderText(V29_DisplayOrder(), cols) . "|" . V29_HiddenText(s.GridHidden, cols)
+}
+
+; @summary Writes widths (at 100 %), order and hidden columns to the ini, when they changed. Not before the grid was fitted
+;          to its first rows. Called when the grid loses the focus, on zoom, sort, view switch, menu actions and at exit.
+; @tags grid, columns, v29
+V29_SaveCols() {
+    s := VMB()
+    if !s.GridLV || !s.GridSized
+        return
+    try {
+        V29_CaptureWidths()
+        cols := V27_Columns()
+        wt := V29_ColWText(s.GridColW, cols), ot := V29_OrderText(V29_DisplayOrder(), cols), ht := V29_HiddenText(s.GridHidden, cols)
+        sig := wt . "|" . ot . "|" . ht
+        if sig == s.ColsSaved
+            return
+        IniWrite(wt, s.Ini, "V29", "ColW")
+        IniWrite(ot, s.Ini, "V29", "ColOrder")
+        IniWrite(ht, s.Ini, "V29", "ColHidden")
+        s.ColsSaved := sig
+    }
+}
+
+; @summary Shows or hides one column (by key), keeps at least one column, moves the cell cursor off a hidden column, saves.
+; @tags grid, columns, gui, v29
+V29_ToggleCol(key, *) {
+    s := VMB()
+    V28_Finish(false)
+    V29_CaptureWidths()
+    cols := V27_Columns()
+    title := key
+    for col in cols
+        if col.Key = key
+            title := col.Title
+    near := s.GridCol
+    if s.GridHidden.Has(key)
+        s.GridHidden.Delete(key)
+    else {
+        before := V29_VisibleOrder()
+        if before.Length <= 1
+            return VMB_Status("At least one column has to stay.")
+        s.GridHidden[key] := 1
+        if s.GridCol >= 1 && s.GridCol <= cols.Length && cols[s.GridCol].Key = key {      ; the cursor was on it: move to its right neighbour (or left at the end)
+            near := V29_NextCol(before, s.GridCol, 1)
+            if near = s.GridCol
+                near := V29_NextCol(before, s.GridCol, -1)
+        }
+    }
+    s.GridCol := near
+    if s.GridCol < 1 || s.GridCol > cols.Length || s.GridHidden.Has(cols[s.GridCol].Key)
+        s.GridCol := V29_NextCol(V29_VisibleOrder(), s.GridCol, 1)
+    V29_ApplyColWidths()
+    V29_SaveCols()
+    V29_CursorRedraw()
+    VMB_Status(title . (s.GridHidden.Has(key) ? " is hidden." : " is shown.") . "  Right-click a column heading to hide or show columns.")
+}
+
+; @summary "Reset columns": the start order, the start widths, every column shown.
+; @tags grid, columns, gui, v29
+V29_ResetCols(*) {
+    s := VMB()
+    V28_Finish(false)
+    s.GridColW := Map(), s.GridHidden := Map(), s.GridColApplied := Map()
+    order := []
+    loop V27_Columns().Length
+        order.Push(A_Index)
+    V29_SetOrder(order)
+    V29_ApplyColWidths()
+    V29_SaveCols()
+    V29_CursorRedraw()
+    VMB_Status("Columns are back to the start order and widths.")
+}
+
+; @summary True when a screen point is on the grid's column heading.
+; @tags grid, columns, gui, v29
+V29_OnHeader(x, y) {
+    s := VMB()
+    if !s.GridLV || s.View != "grid" || !s.GridLV.Visible
+        return false
+    hdr := SendMessage(0x101F, 0, 0, s.GridLV)                   ; LVM_GETHEADER
+    if !hdr
+        return false
+    rc := Buffer(16, 0)
+    DllCall("GetWindowRect", "Ptr", hdr, "Ptr", rc)
+    return x >= NumGet(rc, 0, "Int") && x < NumGet(rc, 8, "Int") && y >= NumGet(rc, 4, "Int") && y < NumGet(rc, 12, "Int")
+}
+
+; @summary Right-click on the column heading: a menu with every column (ticked = shown) and "Reset columns".
+; @tags grid, columns, gui, v29
+V29_ColMenu(x, y) {
+    static last := 0
+    s := VMB()
+    if A_TickCount - last < 400 || VM_IsRecording() || VM_IsPlaying()
+        return
+    last := A_TickCount
+    V28_Finish(false)
+    CoordMode("Menu", "Screen")
+    V29_BuildColMenu().Show(x, y)
+}
+
+; @summary The column menu: every column (ticked = shown) and "Reset columns".
+; @returns Menu
+; @tags grid, columns, gui, v29
+V29_BuildColMenu() {
+    s := VMB()
+    m := Menu()
+    for col in V27_Columns() {
+        m.Add(col.Title, V29_ToggleCol.Bind(col.Key))
+        if !s.GridHidden.Has(col.Key)
+            m.Check(col.Title)
+    }
+    m.Add()
+    m.Add("Reset columns", V29_ResetCols)
+    return m
+}
+
+; @summary Gui-level right-click: when it was on the grid's heading, show the column menu (the heading is a child of the list,
+;          so the list's own event may not get it).
+; @tags grid, columns, gui, v29
+V29_OnGuiMenu(gui, ctl, item, isRight, x, y) {
+    if V29_OnHeader(x, y)
+        V29_ColMenu(x, y)
 }
 
 ; ============================================================================
@@ -19058,6 +19322,28 @@ V4_SelfTest(path) {
         check("V29 paste: a copied wait pastes into another step", V28_ApplyCell(v29To, "wait", V29_PasteText(V29_CopyText(v29W, "wait", "2 s*"))).Ok . v29To["delayMs"], "12000")
         check("V29 paste: a value that does not fit is refused, step unchanged", V28_ApplyCell(v29To, "wait", V29_PasteText("tomorrow")).Ok . v29To["delayMs"], "02000")
         check("V29 paste / copy / cut do nothing without a grid", V29_CopyCell() . V29_PasteCell() . V29_CutCell() . V29_Current(), "0")
+        ; V29 item D: columns remembered
+        v29Cols := V27_Columns()
+        v29W := V29_ParseColW("num=45, inside=300,bogus=50,app=3,text=abc,note=5000,wait=120", v29Cols)
+        check("V29 col widths: known keys with a sensible width are read, the rest is skipped", v29W.Count . "," . v29W["num"] . "," . v29W["inside"] . "," . v29W["wait"] . "," . v29W.Has("app") . v29W.Has("note") . v29W.Has("text"), "3,45,300,120,000")
+        check("V29 col widths: written back in column order", V29_ColWText(v29W, v29Cols), "num=45,inside=300,wait=120")
+        check("V29 col widths: empty text is an empty Map", V29_ParseColW("", v29Cols).Count, 0)
+        v29O := V29_ParseOrder("note,app,bogus,app,num", v29Cols)
+        check("V29 col order: saved keys first, the rest after in normal order, every column once", v29O.Length . "," . v29O[1] . "," . v29O[2] . "," . v29O[3] . "," . v29O[4], v29Cols.Length . ",22,3,1,2")
+        v29Seen := Map()
+        for v29C in v29O
+            v29Seen[v29C] := 1
+        check("V29 col order: no column twice", v29Seen.Count, v29Cols.Length)
+        check("V29 col order: empty text gives the normal order", V4_Join(V29_ParseOrder("", v29Cols), ",") = "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22", true)
+        check("V29 col order: round trip", V29_OrderText(V29_ParseOrder("wait,note", v29Cols), v29Cols) . "|" . SubStr(V29_OrderText(V29_ParseOrder("wait,note", v29Cols), v29Cols), 1, 9), V29_OrderText(V29_ParseOrder("wait,note", v29Cols), v29Cols) . "|wait,note")
+        v29H := V29_ParseHidden("note,bogus, shaky ,note", v29Cols)
+        check("V29 hidden columns: known keys only, no repeats", v29H.Count . v29H.Has("note") . v29H.Has("shaky") . "|" . V29_HiddenText(v29H, v29Cols), "211|shaky,note")
+        v29All := ""
+        for v29C in v29Cols
+            v29All .= v29C.Key . ","
+        check("V29 hidden columns: hiding every column hides none", V29_ParseHidden(v29All, v29Cols).Count, 0)
+        check("V29 columns: the grid's own order and hidden state work without a grid", V29_DisplayOrder().Length . "," . V29_VisibleOrder().Length, v29Cols.Length . "," . v29Cols.Length)
+        check("V29 columns: the header menu is not on a header when there is no grid", V29_OnHeader(5, 5), false)
         check("V29 name box text", V29_NameText("Waits first", 7) . "|" . V29_NameText("", 3) . "|" . V29_NameText("Note", ""), "Waits first · step 7|–|–")
         check("V29 cursor: redraw and rectangle work without a grid", V29_CursorRedraw(), "")
         check("V29 visible order without a grid is every column in order", V29_VisibleOrder().Length, V27_Columns().Length)
