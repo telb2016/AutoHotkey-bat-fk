@@ -20277,7 +20277,7 @@ V31_TestPart(part, lookupFn, winFn) {
         same := both ? V31_ToNum(l) = V31_ToNum(v) : StrLower(l) = StrLower(v)
         return op = "=" ? same : !same
     }
-    if !both && (l = "" || v = "")
+    if !both && (l = "" || v = "" || V31_IsNum(l) || V31_IsNum(v))     ; V33: a number against a text ("20 mg" > 100) is no order: false, not a text compare
         return false
     c := both ? (V31_ToNum(l) < V31_ToNum(v) ? -1 : V31_ToNum(l) > V31_ToNum(v) ? 1 : 0) : StrCompare(l, v, false)
     switch op {
@@ -25852,6 +25852,7 @@ V4_SelfTest(path) {
         check("V31 rule: Status is On / is not On / <> / != / ==", v31T("Status is On", v31Row) . v31T("Status is not On", v31Row) . v31T("Status <> On", v31Row) . v31T("Status != Off", v31Row) . v31T("Status == On", v31Row), "10011")
         check("V31 rule: numbers compare as numbers (9 < 10, 250 > 100, 250 >= 250, 250 <= 249, 250 < 1000)", v31T("Amount > 100", v31Row) . v31T("Amount >= 250", v31Row) . v31T("Amount <= 249", v31Row) . v31T("Amount < 1000", v31Row), "1101")
         check("V31 rule: text order only when both are not numbers (Name > Adams), 9 < 10 as numbers", v31T("Name > Adams", v31Row) . v31T("Name < Adams", v31Row) . v31T("# < 10", v31Row), "101")
+        check("V33 rule: a number against a text has no order (20 mg > 100, N/A < 5, Amount > abc are false), text = still compares", v31T("Amount > 100", Map("Amount", "20 mg")) . v31T("Amount >= 100", Map("Amount", "N/A")) . v31T("Amount < 5", Map("Amount", "N/A")) . v31T("Amount > abc", Map("Amount", "250")) . v31T("Amount = 20 mg", Map("Amount", "20 mg")) . v31T("Name > Adams", Map("Name", "Smith")), "000011")
         check("V31 rule: 1,250 counts as the number 1250", v31T("total > 1000", v31Row) . v31T("total = 1250", v31Row), "11")
         check("V31 rule: contains / does not contain", v31T("Name contains mit", v31Row) . v31T("Name contains xyz", v31Row) . v31T("Name does not contain xyz", v31Row), "101")
         check("V31 rule: is empty / is not empty (a missing value is empty)", v31T("Name is empty", v31Row) . v31T("Name is not empty", v31Row) . v31T("Amount is empty", Map("Amount", "")), "011")
