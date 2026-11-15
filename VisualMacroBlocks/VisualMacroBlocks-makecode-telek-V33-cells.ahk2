@@ -25379,7 +25379,9 @@ V4_SelfTest(path) {
         check("V25 trim: last 200 kept, newest last", v25Cut.Length . "|" . v25Cut[1]["When"] . "|" . v25Cut[200]["When"], "200|t6|t205")
         check("V25 trim: header stays first, short file unchanged", SubStr(V25_TrimRuns(v25Many), 1, 5) . "|" . (V25_TrimRuns(v25Txt . "") != "" ? 1 : 0), "When,|1")
         check("V25 runs path", V25_RunsPath("C:\m\order.vmacro.json") . "|" . V25_RunsPath("") . "|" . V25_RunsPath("C:\m\plain"), "C:\m\order.vmacro.runs.csv||C:\m\plain.runs.csv")
-        v25Dir := A_Temp . "\v25test-" . A_TickCount
+        ; Self-test files stay in the local Downloads folder, never a drive letter that may be a network share.
+        vmbTestRoot := EnvGet("USERPROFILE") . "\Downloads\vmb-selftest"
+        v25Dir := vmbTestRoot . "\v25test-" . A_TickCount
         DirCreate(v25Dir)
         v25M := v25Dir . "\m.vmacro.json"
         V25_RecordRun(v25M, v25Ok, 1.5, 3, Map(2, "Step #2 n"))
@@ -26359,11 +26361,15 @@ V4_SelfTest(path) {
         v26T := V26_BuildText([V26_Line(true, "a"), V26_Line(false, "b")])
         check("V26 text: counts CHECK lines", InStr(v26T, "1 line(s) to CHECK.") > 0 && InStr(v26T, "PASS | a`r`nCHECK | b") > 0, true)
         check("V26 text: all PASS", InStr(V26_BuildText([V26_Line(true, "a")]), "All PASS.") > 0, true)
-        v26D := A_Temp . "\v26-write-test"
-        check("V26 can write: a temp folder", V26_CanWrite(v26D), true)
+        v26D := vmbTestRoot . "\v26-write-test"
+        check("V26 can write: a test folder", V26_CanWrite(v26D), true)
         check("V26 can write: leaves no file behind", FileExist(v26D . "\*.tmp") = "", true)
-        check("V26 can write: a folder that cannot exist", V26_CanWrite("Q:\no\such\drive\x"), false)
-        DirDelete(v26D)
+        ; "|" is illegal in Windows folder names, so DirCreate fails and nothing is created.
+        v26Bad := vmbTestRoot . "\bad|name"
+        check("V26 can write: a folder that cannot exist", V26_CanWrite(v26Bad), false)
+        check("V26 can write: bad folder not created", DirExist(v26Bad) = "", true)
+        try DirDelete(v26D)
+        try DirDelete(vmbTestRoot)
     } catch as err {
         failures += 1
         rows.Push("FAIL | Unexpected exception: " . err.Message . " | " . err.What . " | line " . err.Line)

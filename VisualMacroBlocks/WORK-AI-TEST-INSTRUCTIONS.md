@@ -9,24 +9,31 @@ developer: **do not change the script.** If something fails, record it and go on
    Citrix, Edge, an electronic health record, email, or anything holding patient or work data.
 2. Never type real names, patient data or passwords. Use the made-up values given below (Smith, Jones, 250 ...).
 3. Do not open, play or change the owner's existing macros. Start each check from **New** (an empty macro).
-4. If any box asks to save over an existing file, say No / Cancel. Save test macros only into a new folder
-   `Documents\VisualMacros\ai-test\`.
-5. The emergency stop is **Ctrl+Shift+X** (quits the program). **Esc** stops a running macro.
-6. If the mouse or keyboard starts doing something you did not expect, press Esc, then Ctrl+Shift+X, and write it down.
+4. If any box asks to save over an existing file, say No / Cancel. Put every test file (script copy, self-test
+   output, test macros, results) only in `C:\Users\VHACLETelekB\Downloads\vmb-test\`.
+5. Never create, change or delete anything on a mapped or network drive (Q:, H:, any `\\server\` path), in
+   Documents/OneDrive, or anywhere outside `Downloads\vmb-test\`. If something already exists there that the tests did
+   not make, leave it alone and report it. Exception: the program itself keeps its settings and a quick write check in
+   `Documents\VisualMacros\`; that is normal. Do not open, change or delete the macros already in that folder.
+6. The emergency stop is **Ctrl+Shift+X** (quits the program). **Esc** stops a running macro.
+7. If the mouse or keyboard starts doing something you did not expect, press Esc, then Ctrl+Shift+X, and write it down.
 
 ## What you need
 - The file `VisualMacroBlocks-makecode-telek-V33-cells.ahk2` (same folder as this document in the repository
   `telb2016/AutoHotkey-bat-fk`, branch `claude/recording-process-consistency-e3nt05`, folder `VisualMacroBlocks`).
-  Save a copy as `C:\Temp\vmb\VMB33.ahk` (the `.ahk` ending matters).
+  Save a copy as `C:\Users\VHACLETelekB\Downloads\vmb-test\VMB33.ahk` (the `.ahk` ending matters).
 - **AutoHotkey v2.0.19 or newer, 64-bit** (`AutoHotkey64.exe`). Write down the exact version and that it is 64-bit.
+  On this PC it is NOT in Program Files; use
+  `C:\Users\VHACLETelekB\repos\pharmacy-informatics-CLE-testing\AutoHotkey\v2\AutoHotkey64.exe` (2.0.19, 64-bit).
 - `PC-TEST-ALL.md` from the same folder: the detailed hand checks. This document tells you the order and what to report.
 
 ## Part 1 - automatic checks (5 minutes, no judgement needed)
 1. Self-test. Run:
-   `"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" C:\Temp\vmb\VMB33.ahk --self-test C:\Temp\vmb\selftest.txt`
+   `"C:\Users\VHACLETelekB\repos\pharmacy-informatics-CLE-testing\AutoHotkey\v2\AutoHotkey64.exe" "C:\Users\VHACLETelekB\Downloads\vmb-test\VMB33.ahk" --self-test "C:\Users\VHACLETelekB\Downloads\vmb-test\selftest.txt"`
    Open `selftest.txt`. Report the last line (`Failures: N`), the number of lines starting with `PASS`, and every line
-   that does NOT start with `PASS`. Expected: `Failures: 0`, 947 PASS.
-2. Start the program normally (double-click `VMB33.ahk`). Report any error or warning box, word for word.
+   that does NOT start with `PASS`. Expected: `Failures: 0`, 948 PASS. The self-test writes only to
+   `Downloads\vmb-selftest\` and deletes it at the end; report it if that folder is still there afterwards.
+2. Start the program normally (run `VMB33.ahk` with the AutoHotkey64.exe above). Report any error or warning box, word for word.
 3. Click the **?** button -> **Check this PC**. When the result window appears, click **Copy** and paste the whole text
    into your results file. (Already seen once on this PC: all PASS except a "Fonts" CHECK - that one is known.)
 
@@ -46,7 +53,7 @@ Do this slowly, like a person would.
 9. Clear Notepad and press **Play** twice more. Report whether the text was identical all three times.
 10. Close Notepad completely. Press **Play**. Expected: a box "Ready to play?" naming notepad; choose **No**. Report
     the box text. Then open Notepad again.
-11. Save the macro as `Documents\VisualMacros\ai-test\notepad-test.vmacro.json`.
+11. Save the macro as `C:\Users\VHACLETelekB\Downloads\vmb-test\notepad-test.vmacro.json`.
 
 ## Part 3 - scroll position (could never be tested on Linux)
 1. Notepad: turn Word Wrap off, paste 300 short lines (`line 1` ... `line 300`), scroll so about line 150 is at the top.
@@ -105,7 +112,7 @@ For each line write PASS or FAIL and one sentence on what happened.
 List every step you skipped or could not perform and why (no mouse control, a box you could not read, and so on).
 
 ## The results file
-Write `PC-TEST-RESULTS.md` with: date, Windows version, AutoHotkey version and 32 / 64-bit, screen resolution and
+Write `C:\Users\VHACLETelekB\Downloads\vmb-test\PC-TEST-RESULTS.md` with: date, Windows version, AutoHotkey version and 32 / 64-bit, screen resolution and
 scaling (Settings > Display), which Notepad (classic or Windows 11 tabbed), then one section per Part with the reports
 asked for above. Quote program messages word for word. Add screenshots of anything that looks wrong (grid drawing,
 overlapping controls, empty boxes instead of symbols) - make sure a screenshot shows only Notepad and the program.
