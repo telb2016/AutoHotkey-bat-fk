@@ -285,6 +285,16 @@ NumpadEnter::V31_ValOpenCurrent()
 Delete::V31_ValClearCell()
 Left::V31_ValMoveCol(-1)
 Right::V31_ValMoveCol(1)
+#HotIf V32_FindEditFocused()
+Enter::V32_FindGo(1)
+NumpadEnter::V32_FindGo(1)
++Enter::V32_FindGo(-1)
+Esc::V32_FindClose()
+#HotIf V32_FindKeys()
+F3::V32_FindGo(1)
++F3::V32_FindGo(-1)
+#HotIf V32_FindCanOpen()
+^f::V32_FindOpen()
 #HotIf VMB_EditorActive()
 ^+e::V17_ToggleEasy()
 ^l::V8_VarySelectedDialog()
@@ -16205,15 +16215,19 @@ V27_PlaceGrid() {
         return
     V28_Finish()                                   ; V28: the cell editor would sit on the old place
     grid := s.View = "grid"
+    if s.FindOn && (!grid || s.FindSheet != s.Sheet)
+        s.FindOn := false                           ; V32: Find belongs to the sheet it was opened on
     s.TV.GetPos(&tx, &ty, &tw, &th)
     barH := Round(24 * A_ScreenDPI / 96)
     runH := grid ? barH + 4 : 0                    ; V30: the Run line is the top row, the filter row (V27 C/D/E) sits under it
     tabH := grid ? 28 : 0                          ; V30: the Steps / List tabs sit under the grid
-    gy := grid ? ty + runH + barH + 4 : ty
+    findH := grid && s.FindOn ? barH + 4 : 0       ; V32: the Find bar is one more row above the grid
+    gy := grid ? ty + runH + barH + 4 + findH : ty
     gh := Max(40, th - (gy - ty) - tabH)
     s.GridLV.Move(tx, gy, tw, gh)
     V27_PlaceBar(tx, ty + runH, tw, barH, grid && s.Sheet = "steps")
     V30_Place(tx, ty, tw, gy, gh, barH, grid)
+    V32_PlaceFind(tx, ty + runH + barH + 4, tw, grid && s.FindOn)
     hy := ty - 16
     if s.Ctl.Has("ColHead")
         s.Ctl["ColHead"].GetPos(, &hy)
@@ -18944,6 +18958,7 @@ V30_Build(g) {
     OnMessage(0x100, V30_OnWmKeyDown)                          ; WM_KEYDOWN: typing in the list starts an edit
     V30_ApplyListFont()
     V31_BuildValues(g)                                         ; V31.1: the Values sheet
+    V32_BuildFind(g)                                           ; V32: the Find bar (Ctrl+F)
 }
 
 ; @summary The List sheet's font follows the grid zoom (same fonts as the grid).
@@ -21938,6 +21953,252 @@ V32_RowMenu(row, x, y) {
     return true
 }
 
+; ----------------------------------------------------------------------------
+; V32 item C: Find (Ctrl+F). Moves the cell cursor to each matching cell; it never filters.
+; ----------------------------------------------------------------------------
+
+; @summary Every cell that contains the needle (not case sensitive), in row order and then column order.
+;          rows = Array of Maps (column key -> text), columns = Array of keys (or objects with .Key) in the order they are shown.
+; @returns Array of [row, key] (row = position in rows, 1-based); [] for an empty needle
+; @tags find, grid, v32
+V32_FindAll(rows, columns, needle) {
+    hits := []
+    needle := String(needle)
+    if needle = ""
+        return hits
+    for r, row in rows {
+        for col in columns {
+            key := IsObject(col) ? col.Key : col
+            if InStr(String(row.Get(key, "")), needle, false)
+                hits.Push([r, key])
+        }
+    }
+    return hits
+}
+
+; @summary The next (dir = 1) or previous (dir = -1) match after the current one, wrapping round. current = 0 means "none yet".
+; @returns Integer (0 when there are no matches)
+; @tags find, v32
+V32_FindStep(matches, current, dir) {
+    n := matches.Length
+    if !n
+        return 0
+    if current < 1 || current > n
+        return dir < 0 ? n : 1
+    return Mod(current - 1 + (dir < 0 ? -1 : 1) + n, n) + 1
+}
+
+; @summary The first match at or below a row (where the cursor is); the first match when none is below; 0 when there are none.
+; @returns Integer
+; @tags find, v32
+V32_FindNear(matches, row) {
+    for i, m in matches
+        if m[1] >= row
+            return i
+    return matches.Length ? 1 : 0
+}
+
+; @summary The count text of the Find bar: "2 of 5", "No match" or "" (nothing typed).
+; @tags find, v32
+V32_FindCount(needle, matches, at) => needle = "" ? "" : matches.Length ? at . " of " . matches.Length : "No match"
+
+; @summary Builds the Find bar's controls (hidden; not in s.Ctl). Called from V30_Build.
+; @tags find, gui, v32
+V32_BuildFind(g) {
+    s := VMB()
+    b := s.FindBar := Map()
+    b["Lbl"] := g.AddText("x10 y10 w36 h22 +0x200 Hidden", "Find:")
+    b["Edit"] := g.AddEdit("x+2 yp w240 h22 Hidden +0x4000000")
+    b["Prev"] := g.AddButton("x+4 yp w74 h22 Hidden", "Previous")
+    b["Next"] := g.AddButton("x+4 yp w56 h22 Hidden", "Next")
+    b["Count"] := g.AddText("x+8 yp w110 h22 +0x200 Hidden", "")
+    b["Close"] := g.AddButton("x+4 yp w26 h22 Hidden", "X")
+    b["Edit"].OnEvent("Change", (*) => V32_FindRun())
+    b["Prev"].OnEvent("Click", (*) => V32_FindGo(-1))
+    b["Next"].OnEvent("Click", (*) => V32_FindGo(1))
+    b["Close"].OnEvent("Click", (*) => V32_FindClose())
+}
+
+; @summary Puts the Find bar in its row above the grid (called by V27_PlaceGrid).
+; @tags find, gui, v32
+V32_PlaceFind(x, y, w, show) {
+    s := VMB()
+    b := s.FindBar
+    if !(b is Map) || !b.Has("Edit")
+        return
+    if show {
+        b["Lbl"].Move(x, y + 1, 36, 22)
+        ew := Max(80, Min(260, w - 36 - 74 - 56 - 110 - 26 - 30))
+        b["Edit"].Move(x + 38, y + 1, ew, 22)
+        cx := x + 38 + ew + 4
+        b["Prev"].Move(cx, y + 1, 74, 22), cx += 78
+        b["Next"].Move(cx, y + 1, 56, 22), cx += 60
+        b["Count"].Move(cx + 4, y + 1, 110, 22), cx += 118
+        b["Close"].Move(cx, y + 1, 26, 22)
+    }
+    for name, ctl in b
+        if ctl.Visible != show
+            ctl.Visible := show
+}
+
+; @summary What Find searches on the sheet that has the focus: {Rows (Array of Maps), Cols (keys in shown order), Lv (the ListView)}.
+; @tags find, v32
+V32_FindData() {
+    s := VMB()
+    rows := [], cols := []
+    if s.Sheet = "steps" {
+        for c in V29_VisibleOrder()
+            cols.Push(V27_Columns()[c].Key)
+        return {Rows: s.GridRows, Cols: cols, Lv: s.GridLV}
+    }
+    lv := s.Sheet = "list" ? s.ListLV : s.ValLV
+    first := s.Sheet = "list" ? 3 : 1
+    Loop lv.GetCount("Col")
+        if A_Index >= first
+            cols.Push(A_Index)
+    Loop lv.GetCount() {
+        r := A_Index, cells := Map()
+        for c in cols
+            cells[c] := lv.GetText(r, c)
+        rows.Push(cells)
+    }
+    return {Rows: rows, Cols: cols, Lv: lv}
+}
+
+; @summary Moves the cell cursor to a match (row, key) on the current sheet and scrolls to it. The keyboard focus stays where it is.
+; @tags find, grid, v32
+V32_FindShow(m) {
+    s := VMB()
+    if s.Sheet = "steps" {
+        node := s.GridNodes.Get(m[1], 0)
+        if !IsObject(node)
+            return
+        col := 0
+        for i, c in V27_Columns()
+            if c.Key = m[2]
+                col := i
+        s.GridRange := 0
+        V32_SelectNode(node)
+        if col {
+            s.GridCol := col
+            V28_EnsureVisible(m[1], col)
+            V29_CursorRedraw()
+        }
+        return
+    }
+    lv := s.Sheet = "list" ? s.ListLV : s.ValLV
+    try lv.Modify(m[1], "Select Focus Vis")
+    if s.Sheet = "list"
+        s.ListCol := m[2]
+    else
+        s.ValCol := m[2]
+    V30_EnsureVisible(m[1], m[2], lv)
+}
+
+; @summary Searches again for what is in the Find box and goes to the first match at or below the cursor.
+; @tags find, v32
+V32_FindRun() {
+    s := VMB()
+    if !s.FindOn
+        return
+    needle := s.FindBar["Edit"].Value
+    data := V32_FindData()
+    s.FindHits := V32_FindAll(data.Rows, data.Cols, needle)
+    cur := data.Lv.GetNext(0)
+    s.FindAt := V32_FindNear(s.FindHits, cur ? cur : 1)
+    V32_FindReport(needle, data)
+}
+
+; @summary Goes to the next (1) / previous (-1) match (Enter / F3, Shift+F3).
+; @tags find, v32
+V32_FindGo(dir) {
+    s := VMB()
+    if !s.FindOn
+        return
+    needle := s.FindBar["Edit"].Value
+    data := V32_FindData()
+    hits := V32_FindAll(data.Rows, data.Cols, needle)
+    if hits.Length = s.FindHits.Length && s.FindAt
+        s.FindAt := V32_FindStep(hits, s.FindAt, dir)
+    else {
+        cur := data.Lv.GetNext(0)
+        s.FindAt := V32_FindNear(hits, cur ? cur : 1)
+    }
+    s.FindHits := hits
+    V32_FindReport(needle, data)
+}
+
+; @summary Shows the count, goes to the current match and says where it is in the status bar.
+; @tags find, v32
+V32_FindReport(needle, data) {
+    s := VMB()
+    s.FindBar["Count"].Text := V32_FindCount(needle, s.FindHits, s.FindAt)
+    if !s.FindAt {
+        return VMB_Status(needle = "" ? "Find: type what to look for. Enter or F3 = next, Shift+F3 = previous, Esc closes." : "Find: no cell contains '" . needle . "'.")
+    }
+    m := s.FindHits[s.FindAt]
+    V32_FindShow(m)
+    title := s.Sheet = "steps" ? V32_ColTitle(m[2]) : ["Name", "Value", "When"][Min(m[2], 3)]
+    if s.Sheet = "list" {
+        heads := V30_Headers(s.Macro["settings"])
+        title := m[2] - 2 >= 1 && m[2] - 2 <= heads.Length ? heads[m[2] - 2] : "column " . m[2]
+    }
+    VMB_Status("Find: match " . s.FindAt . " of " . s.FindHits.Length . " - row " . m[1] . ", " . title . ".")
+}
+
+; @summary The title of a grid column from its key.
+; @tags find, v32
+V32_ColTitle(key) {
+    for c in V27_Columns()
+        if c.Key = key
+            return c.Title
+    return key
+}
+
+; @summary Ctrl+F: opens the Find bar above the grid (or goes back to its box) and searches for what is in it.
+; @tags find, gui, v32
+V32_FindOpen() {
+    s := VMB()
+    if VM_IsRecording() || VM_IsPlaying() || s.View != "grid"
+        return
+    V28_Finish()
+    if !s.FindOn {
+        s.FindOn := true, s.FindSheet := s.Sheet, s.FindHits := [], s.FindAt := 0
+        V27_PlaceGrid()
+    }
+    s.FindBar["Edit"].Focus()
+    SendMessage(0xB1, 0, -1, s.FindBar["Edit"])            ; EM_SETSEL: the old text is selected, typing replaces it
+    V32_FindRun()
+}
+
+; @summary Esc / X: closes the Find bar and gives the keyboard back to the grid.
+; @tags find, gui, v32
+V32_FindClose() {
+    s := VMB()
+    if !s.FindOn
+        return
+    s.FindOn := false, s.FindHits := [], s.FindAt := 0
+    V27_PlaceGrid()
+    try (s.Sheet = "list" ? s.ListLV : s.Sheet = "values" ? s.ValLV : s.GridLV).Focus()
+    VMB_Status("Find closed.")
+}
+
+; @summary True while the Find box has the keyboard focus.
+; @tags find, hotkey, v32
+V32_FindEditFocused(*) {
+    s := VMB()
+    return s.FindOn && s.Gui && !VM_IsPlaying() && !VM_IsRecording() && WinActive("ahk_id " . s.Gui.Hwnd)
+        && DllCall("GetFocus", "Ptr") = s.FindBar["Edit"].Hwnd
+}
+
+; @summary True when F3 / Shift+F3 should find: the Find bar is open and the Find box or the sheet's grid has the focus.
+; @tags find, hotkey, v32
+V32_FindKeys(*) => VMB().FindOn && (V32_FindEditFocused() || V27_GridFocused() || V30_ListFocused() || V31_ValFocused())
+
+; @summary True when Ctrl+F opens Find: one of the three grids (Steps, List, Values) or the Find box has the focus.
+; @tags find, hotkey, v32
+V32_FindCanOpen(*) => V27_GridFocused() || V30_ListFocused() || V31_ValFocused() || V32_FindEditFocused()
+
 ; ==== V32 END (new V32 functions are added above this line)
 
 ; ============================================================================
@@ -23892,6 +24153,16 @@ V4_SelfTest(path) {
         check("V32 plain view: step order and nothing filtered", V32_ViewIsPlain("", "", "", "  ", 0), true)
         check("V32 plain view: a sort, a filter word, a drop-down or a header pick each make it not plain", V32_ViewIsPlain("app", "", "", "", 0) . V32_ViewIsPlain("", "x", "", "", 0) . V32_ViewIsPlain("", "", "Click", "", 0) . V32_ViewIsPlain("", "", "", "a", 0) . V32_ViewIsPlain("", "", "", "", 1), "00000")
         check("V32 plain view: the sentence the owner reads", V32_PlainSentence(), "Sort and filter are on: switch to Step order to move rows.")
+
+        v32F := [Map("a", "Click", "b", "Notepad"), Map("a", "Type", "b", "hello NOTE"), Map("a", "Wait", "b", "x"), Map("a", "Type", "b", "note again")]
+        v32H := V32_FindAll(v32F, ["a", "b"], "note")
+        check("V32 find: every cell that contains it, any case, row order then column order", v32H.Length . "|" . v32H[1][1] . v32H[1][2] . "|" . v32H[2][1] . v32H[2][2] . "|" . v32H[3][1] . v32H[3][2], "3|1b|2b|4b")
+        check("V32 find: column order decides within a row", V32_FindAll([Map("a", "xx", "b", "xx")], ["b", "a"], "x")[1][2] . V32_FindAll([Map("a", "xx", "b", "xx")], ["a", "b"], "x")[1][2], "ba")
+        check("V32 find: column objects work, an empty needle and a missing cell find nothing", V32_FindAll(v32F, V27_Columns(), "").Length . "|" . V32_FindAll(v32F, V27_Columns(), "zzz").Length . "|" . V32_FindAll(v32F, [{Key: "b"}], "again").Length, "0|0|1")
+        check("V32 find step: forward wraps round, backward wraps round", V32_FindStep(v32H, 1, 1) . V32_FindStep(v32H, 3, 1) . V32_FindStep(v32H, 1, -1) . V32_FindStep(v32H, 2, -1), "2131")
+        check("V32 find step: nothing yet starts at the first (forward) or last (backward) match, no matches gives 0", V32_FindStep(v32H, 0, 1) . V32_FindStep(v32H, 0, -1) . V32_FindStep([], 0, 1), "130")
+        check("V32 find near: first match at or below the cursor row, wraps to the first", V32_FindNear(v32H, 2) . V32_FindNear(v32H, 3) . V32_FindNear(v32H, 9) . V32_FindNear([], 1), "2310")
+        check("V32 find count text", V32_FindCount("", [], 0) . "|" . V32_FindCount("q", [], 0) . "|" . V32_FindCount("n", v32H, 2), "|No match|2 of 3")
 
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
