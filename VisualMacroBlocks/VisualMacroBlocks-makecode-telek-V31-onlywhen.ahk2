@@ -1,6 +1,7 @@
 ; VisualMacroBlocks-makecode-telek-V31
 ; V31 = V30 + rules as columns instead of programming blocks: "Only when" (if / otherwise), "If it fails" (stop / skip / try 3 times),
 ;       Skip this row / Stop the run / Wait until window steps, an "Add step" menu, a plain Blocks toolbox, and a stop after 3 bad rows in a row.
+; V31.1 = Values sheet (names you can use as =name, ask at start, counts up, today's date) and the Remember step.
 ; VisualMacroBlocks-makecode-telek-V30
 ; V30 = V29 + loops without loop blocks: a List sheet (paste your items from Excel), =Column cells in Type steps, and one switch
 ;       "Run: once / for each row of the List / N times". The loop is built in memory at Play; the saved macro never gets loop blocks.
@@ -261,6 +262,22 @@ NumpadEnter::V30_OpenCurrent()
 Delete::V30_ClearCell()
 Left::V30_MoveCol(-1)
 Right::V30_MoveCol(1)
+#HotIf V31_ValEditFocused()
+Enter::V31_ValEnter("down")
+NumpadEnter::V31_ValEnter("down")
+Tab::V31_ValEnter("tab")
++Tab::V31_ValEnter("back")
+Esc::(V31_ValCancel(), VMB_Status("Not changed."))
+#HotIf V31_ValFocused()
+^c::V31_ValCopyCell()
+^z::V31_ValUndo()
+^y::V31_ValUndo(true)
+F2::V31_ValOpenCurrent()
+Enter::V31_ValOpenCurrent()
+NumpadEnter::V31_ValOpenCurrent()
+Delete::V31_ValClearCell()
+Left::V31_ValMoveCol(-1)
+Right::V31_ValMoveCol(1)
 #HotIf VMB_EditorActive()
 ^+e::V17_ToggleEasy()
 ^l::V8_VarySelectedDialog()
@@ -296,7 +313,8 @@ VMB() {
         GridZoom: 100, GridColW: Map(), GridColApplied: Map(), GridHidden: Map(), GridOrderKeys: [], ColsSaved: "", CurCell: "",
         HasRun: false, History: false, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0,
         Sheet: "steps", PreviewRow: 1, RunBar: Map(), SheetTabs: Map(), ListBar: Map(), ListLV: 0, ListUndo: [], ListRedo: [], ListResult: Map(),
-        GridMark: Map(), RuleDlg: 0, ListEditOn: false, ListEditRow: 0, ListEditLvRow: 0, ListEditCol: 3, ListEditOrig: "", ListCol: 3}
+        GridMark: Map(), RuleDlg: 0, ListEditOn: false, ListEditRow: 0, ListEditLvRow: 0, ListEditCol: 3, ListEditOrig: "", ListCol: 3,
+        ValLV: 0, ValBar: Map(), ValUndo: [], ValRedo: [], ValEditOn: false, ValEditRow: 0, ValEditCol: 1, ValEditOrig: "", ValEditPick: false, ValCol: 1}
     return s
 }
 
@@ -3433,6 +3451,7 @@ VMB_SetMacro(macro, path) {
     s.LastNotes := Map()            ; V21: a new or opened macro has no notes from a run
     s.HasRun := false               ; V27: nothing has run yet
     s.ListUndo := [], s.ListRedo := [], s.ListResult := Map(), s.PreviewRow := 1     ; V30: a new or opened macro has its own list
+    s.ValUndo := [], s.ValRedo := []                                                 ; V31.1: and its own Values
     s.Checked := Map()
     VMB_SettingsToControls()
     V7_LoadMemoryBar()
@@ -4822,8 +4841,18 @@ VM_Play(macro, opts := 0) {
     errs := VM_Validate(macro)
     if errs.Length
         throw Error(V4_Join(errs, "`n"))
+    askAnswer := ""
+    if !(IsObject(opts) && opts.HasOwnProp("Asked")) {                              ; V31.1: the "ask at start" form, once, before step 1
+        ask := V31_AskAtStart(macro.Get("settings", Map()))
+        if !ask.Ok
+            return {Ok: false, Index: 0, Message: "Stopped before step 1: the Values form was cancelled.", Changed: false, Failed: 0, Skipped: 0,
+                RunToMissed: false, Warnings: [], RowLog: Map(), RowsSeen: 0}
+        askAnswer := ask.Asked
+    }
     state.Stop := false, state.Playing := true
     runner := V4Runner(macro, IsObject(opts) ? opts : {})
+    if askAnswer is Map
+        runner.V31Init(askAnswer)
     state.Runner := runner
     if runner.Dbg
         V5_DbgBegin(runner.Opts)
@@ -4887,6 +4916,32 @@ class V4Runner {
         this.RowLog := Map(), this.RowsSeen := 0                ; V30: list runs: row number -> why it was skipped; how many rows were started
         this.WhenCache := Map(), this.WhenSkipped := 0         ; V31: chain info per list of steps; steps left out by an Only when rule
         this.BadStreak := 0, this.StopNote := ""                ; V31: bad rows in a row (list runs); why the runner stopped itself
+        this.V31Init(opts.HasOwnProp("Asked") ? opts.Asked : "")
+    }
+    ; V31.1: builds the Values of the run (the macro's settings["values"]): fixed, ask at start (asked = Map name -> answer), today's
+    ; date (worked out once, at the start), counts up (worked out when used: start + round - 1; a once run stays at the start value).
+    V31Init(asked) {
+        this.Vals := Map(), this.Vals.CaseSense := false
+        this.Counts := Map(), this.Counts.CaseSense := false
+        mode := String(this.Settings.Get("runMode", "once"))
+        this.CountRounds := mode = "list" || mode = "times"
+        for item in V31_ValuesOf(this.Settings) {
+            if !(item is Map)
+                continue
+            nm := Trim(String(item.Get("name", "")))
+            if nm = ""
+                continue
+            if item.Get("when", "fixed") = "counts"
+                this.Counts[nm] := item
+            else
+                this.Vals[nm] := String(V31_ValueAt(item, 0, asked))
+        }
+    }
+    V31HasValue(name) => this.Vals.Has(name) || this.Counts.Has(name)
+    V31ValueOf(name) {
+        if this.Counts.Has(name)
+            return String(V31_ValueAt(this.Counts[name], this.CountRounds ? Max(0, this.LoopIndex - 1) : 0, ""))
+        return this.Vals[name]
     }
     Expand(value) {
         if IsObject(value)
@@ -4914,6 +4969,8 @@ class V4Runner {
                 return drug
             throw Error("Legacy {{search::...}} transformations are not implemented in V4. Use a data column instead.")
         }
+        if this.V31HasValue(name) && !this.Row.Has(name)           ; V31.1: the list row first, then the Values, then the runner's variables
+            return this.V31ValueOf(name)
         if this.Vars.Has(name)
             return this.Vars[name]
         if StrLower(name) = "productsearch" {
@@ -5005,6 +5062,10 @@ class V4Runner {
         out := []
         for k in this.Row
             out.Push(k)
+        for k in this.Vals
+            out.Push(k)
+        for k in this.Counts
+            out.Push(k)
         for k in this.Vars
             out.Push(k)
         return out
@@ -5014,6 +5075,8 @@ class V4Runner {
             return this.LoopIndex
         if this.Row.Has(name)
             return this.Row[name]
+        if this.V31HasValue(name)
+            return this.V31ValueOf(name)
         if this.Vars.Has(name)
             return this.Vars[name]
         return this.Lookup(name)
@@ -5348,6 +5411,11 @@ class V4Runner {
                     value := Trim(reply.Value)
                 }
                 this.Vars[node["name"]] := value
+                if V4_Bool(node.Get("remember", 0)) {                  ; V31.1: a Remember step also sets the Value of that name
+                    this.Vals[node["name"]] := value
+                    if this.Counts.Has(node["name"])
+                        this.Counts.Delete(node["name"])
+                }
             case "change": this.Vars[node["name"]] := Number(this.Vars.Get(node["name"], 0)) + Number(this.Expand(node.Get("by", 1)))
             case "ndc":
                 raw := this.Expand(node.Get("source", ""))
@@ -15781,9 +15849,9 @@ V27_Cells(node, ctx) {
         st := ctx.Get("Settings", "")
         if st is Map {
             lst := V30_ListOf(st), rm := String(st.Get("runMode", "once"))
-            if lst is Map || rm = "list" || rm = "times" {
+            if lst is Map || rm = "list" || rm = "times" || V31_ValuesOf(st).Length {
                 pn := ctx.Get("Preview", 1)
-                pc := V30_TextCell(node.Get("text", ""), V30_Headers(st), V30_PreviewRowCells(st, pn), pn)
+                pc := V30_TextCell(node.Get("text", ""), V31_NamesAll(st), V31_PreviewRow(st, pn), pn)
                 if pc != ""
                     m["text"] := pc
             }
@@ -15884,6 +15952,7 @@ V27_ActionText(node) {
         case "delay", "wait": return "Wait"
         case "det_use_window", "det_normalize_win": return "Window"
         case "det_wait_window": return "Wait"
+        case "set": return V31_IsRemember(node) ? "Remember" : "Other"
         case "stop":
             a := node.Get("action", "break")
             return a = "continue" ? "Skip this row" : a = "endrun" ? "Stop the run" : "Other"
@@ -15921,6 +15990,8 @@ V27_TextText(node) {
         return StrLower(RegExReplace(node.Get("direction", "WheelDown"), "i)^Wheel")) . " × " . Integer(node.Get("count", 1))
     if t = "det_wait_window"
         return V31_WaitText(node)
+    if V31_IsRemember(node)
+        return V31_RememberText(node, V31_NamesAllNow())
     return ""
 }
 
@@ -16132,7 +16203,7 @@ V27_PlaceGrid() {
     gy := grid ? ty + runH + barH + 4 : ty
     gh := Max(40, th - (gy - ty) - tabH)
     s.GridLV.Move(tx, gy, tw, gh)
-    V27_PlaceBar(tx, ty + runH, tw, barH, grid && s.Sheet != "list")
+    V27_PlaceBar(tx, ty + runH, tw, barH, grid && s.Sheet = "steps")
     V30_Place(tx, ty, tw, gy, gh, barH, grid)
     hy := ty - 16
     if s.Ctl.Has("ColHead")
@@ -16145,7 +16216,7 @@ V27_PlaceGrid() {
     if s.Ctl.Has("ColHead") && grid
         s.Ctl["ColHead"].Visible := false
     s.TV.Visible := !grid
-    s.GridLV.Visible := grid && s.Sheet != "list"
+    s.GridLV.Visible := grid && s.Sheet = "steps"
 }
 
 ; @summary Switches between the tree (list) and the grid, remembers the choice in the ini ([V27] View).
@@ -16753,7 +16824,7 @@ V28_Editable(node, key) {
     geo := node.Get("geo", "")
     switch key {
         case "text":
-            return (t = "text" && !V4_Bool(node.Get("ask", 0))) || t = "keys" || t = "wheel" || t = "det_wait_window" ? "text" : ""
+            return (t = "text" && !V4_Bool(node.Get("ask", 0))) || t = "keys" || t = "wheel" || t = "det_wait_window" || V31_IsRemember(node) ? "text" : ""
         case "button":
             return mouse ? ["Left", "Right", "Middle"] : ""
         case "clicks":
@@ -16850,6 +16921,8 @@ V28_EditText(node, key) {
                 return node.Get("keys", "")
             if t = "det_wait_window"
                 return V31_WaitText(node)
+            if V31_IsRemember(node)
+                return V31_RememberText(node, V31_NamesAllNow())
             return StrLower(RegExReplace(node.Get("direction", "WheelDown"), "i)^Wheel")) . " " . Integer(node.Get("count", 1))
         case "button":
             return node.Get("button", "Left")
@@ -16906,7 +16979,9 @@ V28_Hint(node, key) {
                 return "Scroll: up, down, left or right, then how many, for example down 3."
             if t = "det_wait_window"
                 return "Wait until: Save As is open  (or  is closed), then optionally  within 10 s."
-            return V30_Gate() ? "The text that is typed. =Name types the list column Name, =# the round number, '=x types a text that starts with =." : "The text that is typed."
+            if V31_IsRemember(node)
+                return "Remember: clipboard as total   or   " . Chr(34) . "some text" . Chr(34) . " as total. Then type =total in a Type step."
+            return V30_Gate() ? "The text that is typed. =Name types the list column Name or a Value, =# the round number, '=x types a text that starts with =." : "The text that is typed."
     }
     return "Pick one."
 }
@@ -16965,6 +17040,10 @@ V28_Plan(node, key, input) {
             if t = "keys" {
                 bad := V28_KeysError(String(input))
                 return bad != "" ? no(bad) : yes([set(["keys"], String(input))])
+            }
+            if V31_IsRemember(node) {                              ; V31.1: clipboard as name / "text" as name
+                rm := V31_ParseRemember(String(input), V31_SettingsNow())
+                return rm.Ok ? yes([set(["name"], rm.Name), set(["value"], rm.Value)]) : no(rm.Error)
             }
             if t = "det_wait_window" {
                 ww := V31_ParseWaitWindow(String(input), node.Get("timeoutSec", 10))
@@ -17255,6 +17334,7 @@ V28_Do(node, plan, message) {
     VMB_Refresh(node)
     V7_AutoSaveNow()
     VMB_Status(message)
+    V31_AfterStepEdit(node)                                    ; V31.1: a Remember step makes its Values row
 }
 
 ; @summary Saves the editor's value into the step. A rejected value keeps the editor open, shows the sentence in the status bar and
@@ -18749,7 +18829,7 @@ V30_Gate() {
         return false
     st := s.Macro["settings"]
     mode := String(st.Get("runMode", "once"))
-    return V30_ListOf(st) is Map || mode = "list" || mode = "times"
+    return V30_ListOf(st) is Map || mode = "list" || mode = "times" || V31_ValuesOf(st).Length > 0
 }
 
 ; @summary The column names of the open macro's list ([] when none or no macro).
@@ -18761,12 +18841,12 @@ V30_HeadersNow() {
 
 ; @summary What the Text cell editor opens with: the stored text, shown as =Column when the macro uses the list ideas.
 ; @tags list, cells, v30
-V30_ShownNow(stored) => V30_Gate() ? V30_ToShown(stored, V30_HeadersNow()) : String(stored)
+V30_ShownNow(stored) => V30_Gate() ? V30_ToShown(stored, V31_NamesAllNow()) : String(stored)
 
 ; @summary What a typed Text cell becomes: with the list ideas on, =Column is read; otherwise the text is kept as typed.
 ; @returns {Ok, Text, Error}
 ; @tags list, cells, v30
-V30_StoredNow(input) => V30_Gate() ? V30_ToStored(input, V30_HeadersNow()) : {Ok: true, Text: String(input), Error: ""}
+V30_StoredNow(input) => V30_Gate() ? V30_ToStored(input, V31_NamesAllNow()) : {Ok: true, Text: String(input), Error: ""}
 
 ; @summary The top-level blocks of the open macro ([] when none).
 ; @tags run, v30
@@ -18820,9 +18900,11 @@ V30_Build(g) {
     t := s.SheetTabs := Map()
     t["Steps"] := g.AddButton("x10 y10 w84 h22 Hidden", "Steps")
     t["List"] := g.AddButton("x+2 yp w120 h22 Hidden", "List")
-    t["Hint"] := g.AddText("x+10 yp w420 h22 +0x200 Hidden", "Steps = what to do once.   List = the things to do it for.")
+    t["Values"] := g.AddButton("x+2 yp w110 h22 Hidden", "Values")
+    t["Hint"] := g.AddText("x+10 yp w420 h22 +0x200 Hidden", "Steps = what to do once.   List = the things to do it for.   Values = names you can use as =name.")
     t["Steps"].OnEvent("Click", (*) => V30_SetSheet("steps"))
     t["List"].OnEvent("Click", (*) => V30_SetSheet("list"))
+    t["Values"].OnEvent("Click", (*) => V30_SetSheet("values"))
     b := s.ListBar := Map()
     b["Paste"] := g.AddButton("x10 y10 w90 h22 Hidden", "Paste list")
     b["Add"] := g.AddButton("x+4 yp w80 h22 Hidden", "Add row")
@@ -18843,6 +18925,7 @@ V30_Build(g) {
     s.ListLV.OnEvent("ContextMenu", V30_OnListMenu)
     OnMessage(0x100, V30_OnWmKeyDown)                          ; WM_KEYDOWN: typing in the list starts an edit
     V30_ApplyListFont()
+    V31_BuildValues(g)                                         ; V31.1: the Values sheet
 }
 
 ; @summary The List sheet's font follows the grid zoom (same fonts as the grid).
@@ -18864,6 +18947,7 @@ V30_Place(x, y, w, gy, gh, barH, show) {
     if !(r is Map) || !r.Has("Once") || !s.ListLV || !(s.Macro is Map)
         return
     V30_ListFinish(false)
+    V31_ValFinish(false)
     loops := V30_HasLoops(s.Macro["blocks"])
     onList := s.Sheet = "list"
     h := Max(18, barH - 4)
@@ -18900,14 +18984,16 @@ V30_Place(x, y, w, gy, gh, barH, show) {
     V30_SyncRun()
     ; the sheet tabs under the grid
     if show {
-        wt["Steps"] := 1, wt["List"] := 1
+        wt["Steps"] := 1, wt["List"] := 1, wt["Values"] := 1
         ty := gy + gh + 3
         t["Steps"].Move(x, ty, 84, 22)
         t["List"].Move(x + 86, ty, 120, 22)
-        t["Hint"].Move(x + 216, ty, Max(40, w - 216), 22)
-        t["Steps"].Enabled := onList
+        t["Values"].Move(x + 208, ty, 110, 22)
+        t["Hint"].Move(x + 328, ty, Max(40, w - 328), 22)
+        t["Steps"].Enabled := s.Sheet != "steps"
         t["List"].Enabled := !onList
-        if w >= 560
+        t["Values"].Enabled := s.Sheet != "values"
+        if w >= 760
             wt["Hint"] := 1
         fct := A_ScreenDPI / 96                                 ; repaint the strip: under Wine a moved / disabled button left a blank patch
         rc := Buffer(16, 0)
@@ -18943,6 +19029,7 @@ V30_Place(x, y, w, gy, gh, barH, show) {
         }
     if s.ListLV.Visible != wl
         s.ListLV.Visible := wl
+    V31_PlaceValues(x, y, w, gy, gh, barH, show)               ; V31.1: the Values sheet
 }
 
 ; @summary Syncs the Run line with the macro: which choice is on, the row count, the times number, the preview row, and whether the
@@ -18981,6 +19068,7 @@ V30_Refresh() {
     s.SheetTabs["List"].Text := n ? "List (" . n . ")" : "List"
     if s.Sheet = "list" && s.View = "grid"
         V30_FillList()
+    V31_ValRefresh()
 }
 
 ; @summary The Run switch was clicked: stores runMode in the macro (Dirty, autosave). The list mode warns when the List is empty.
@@ -19064,16 +19152,20 @@ V30_SetSheet(sheet) {
         return
     V28_Cancel(false)
     V30_ListFinish(false)
+    V31_ValFinish(false)
     s.Sheet := sheet
     if s.View != "grid"
         V27_SetView("grid")
     if sheet = "list"
         V30_FillList()
+    else if sheet = "values"
+        V31_ValFill()
     else
         V27_FillGrid()                                     ; the Text cells show the preview of the (maybe changed) list
     V27_PlaceGrid()
-    try (sheet = "list" ? (s.ListLV.Visible ? s.ListLV : s.ListBar["Paste"]) : s.GridLV).Focus()
+    try (sheet = "list" ? (s.ListLV.Visible ? s.ListLV : s.ListBar["Paste"]) : sheet = "values" ? s.ValLV : s.GridLV).Focus()
     VMB_Status(sheet = "list" ? "List sheet: the things to do the steps for. Paste from Excel (Ctrl+V), double-click a cell to change it."
+        : sheet = "values" ? "Values sheet: names you can use as =name in a Type step or an Only when rule. Add value, then double-click a cell."
         : "Steps sheet.")
 }
 
@@ -19334,9 +19426,10 @@ V30_ListUndo(redo := false) {
 
 ; @summary Cell rectangle (client pixels of the list) of a cell of the List sheet, in the window's units: {X, Y, W, H}, or 0.
 ; @tags list, gui, v30
-V30_CellRect(row, col) {
+V30_CellRect(row, col, lv := "") {
     s := VMB()
-    lv := s.ListLV
+    if !IsObject(lv)
+        lv := s.ListLV
     rc := Buffer(16, 0)
     NumPut("Int", 0, "Int", col - 1, rc)
     if !SendMessage(0x1038, row - 1, rc.Ptr, lv)               ; LVM_GETSUBITEMRECT
@@ -19354,9 +19447,10 @@ V30_CellRect(row, col) {
 
 ; @summary Scrolls the List sheet so a cell is fully visible.
 ; @tags list, gui, v30
-V30_EnsureVisible(row, col) {
+V30_EnsureVisible(row, col, lv := "") {
     s := VMB()
-    lv := s.ListLV
+    if !IsObject(lv)
+        lv := s.ListLV
     try lv.Modify(row, "Vis")
     rc := Buffer(16, 0)
     NumPut("Int", 0, "Int", col - 1, rc)
@@ -19373,14 +19467,16 @@ V30_EnsureVisible(row, col) {
 
 ; @summary Which cell of the List sheet is under the mouse: {Row, Col} (1-based, 0 when none).
 ; @tags list, gui, v30
-V30_HitCell() {
+V30_HitCell(lv := "") {
     s := VMB()
+    if !IsObject(lv)
+        lv := s.ListLV
     pt := Buffer(8, 0)
     DllCall("GetCursorPos", "Ptr", pt)
-    DllCall("ScreenToClient", "Ptr", s.ListLV.Hwnd, "Ptr", pt)
+    DllCall("ScreenToClient", "Ptr", lv.Hwnd, "Ptr", pt)
     inf := Buffer(24, 0)
     NumPut("Int", NumGet(pt, 0, "Int"), "Int", NumGet(pt, 4, "Int"), inf)
-    SendMessage(0x1039, 0, inf.Ptr, s.ListLV)                  ; LVM_SUBITEMHITTEST
+    SendMessage(0x1039, 0, inf.Ptr, lv)                  ; LVM_SUBITEMHITTEST
     return {Row: NumGet(inf, 12, "Int") + 1, Col: NumGet(inf, 16, "Int") + 1}
 }
 
@@ -19552,6 +19648,8 @@ V30_RenameColumn(j, newName := "") {
     }
     newName := Trim(newName)
     err := V30_NameError(newName, list["headers"], j)
+    if err = "" && V31_HasValueNamed(s.Macro["settings"], newName)
+        err := newName . " is already the name of a Value. Pick another name."
     if err != "" {
         VMB_Status(err)
         return false
@@ -19678,12 +19776,12 @@ V30_TextMenu(row, x, y) {
         s.TV.Modify(s.NodeItem[node], "Select")
     s.GridCol := hit.Col
     sub := Menu()
-    for h in V30_HeadersNow()
+    for h in V31_NamesAllNow()
         sub.Add(h, V30_UseColumn.Bind(node, h))
     sub.Add("# (the round number)", V30_UseColumn.Bind(node, "#"))
     m := Menu()
     m.Add("Use list column", sub)
-    if !V30_HeadersNow().Length
+    if !V31_NamesAllNow().Length
         m.Disable("Use list column")
     m.Add("Type fixed text...", (*) => V28_Open(row, hit.Col))
     m.Add()
@@ -20254,9 +20352,9 @@ V31_PreviewFor(blocks, settings, number) {
     if !(settings is Map) || !(blocks is Array)
         return Map()
     lst := V30_ListOf(settings), rm := String(settings.Get("runMode", "once"))
-    if !(lst is Map) && rm != "list" && rm != "times"
+    if !(lst is Map) && rm != "list" && rm != "times" && !V31_ValuesOf(settings).Length
         return Map()
-    headers := V30_Headers(settings), row := V30_PreviewRowCells(settings, number)
+    headers := V31_NamesAll(settings), row := V31_PreviewRow(settings, number)
     names := V31_RuleNames(headers, V31_MacroVars(blocks))
     return V31_PreviewDecisions(blocks, names, (nm) => V31_PreviewValue(nm, headers, row, number), V31_WindowOpen)
 }
@@ -20415,7 +20513,7 @@ V31_NamesNow() {
     s := VMB()
     if !(s.Macro is Map)
         return V31_RuleNames([])
-    return V31_RuleNames(V30_Headers(s.Macro.Get("settings", "")), V31_MacroVars(s.Macro.Get("blocks", [])))
+    return V31_RuleNames(V31_NamesAll(s.Macro.Get("settings", "")), V31_MacroVars(s.Macro.Get("blocks", [])))
 }
 
 ; @summary True for the grid cells that Delete / Ctrl+X can empty.
@@ -20484,7 +20582,7 @@ V31_WaitWindow(node, ctx) {
 ; @returns Array
 ; @tags steps, menu, v31
 V31_StepKinds() => [["Type text", "text"], ["Press keys", "keys"], ["Wait (seconds)", "delay"], ["Wait until window...", "waitwin"],
-    ["Skip this row", "skiprow"], ["Stop the run", "stoprun"]]
+    ["Skip this row", "skiprow"], ["Stop the run", "stoprun"], ["Remember clipboard as...", "remember"]]
 
 ; @summary A new step of one of the kinds of V31_StepKinds, with plain starting values (nothing to answer: change it in its cells).
 ;          Skip this row = a Flow control step that goes on with the next row (continue); Stop the run = one that ends everything (endrun).
@@ -20498,6 +20596,7 @@ V31_NewStep(kind) {
         case "waitwin": return V4_CreateNode("det_wait_window")
         case "skiprow": return Map("type", "stop", "action", "continue")
         case "stoprun": return Map("type", "stop", "action", "endrun")
+        case "remember": return V31_NewRemember(V31_FreeName("value"), "{{clipboard}}")
     }
     return ""
 }
@@ -20513,6 +20612,7 @@ V31_AddStep(kind, *) {
     where := VMB_InsertPoint()
     VMB_InsertNode(node, where.List, where.Index)
     VMB_Status("Step added below. Change it in its cells (double-click). Ctrl+Z undoes it.")
+    V31_AfterStepEdit(node)
 }
 
 ; @summary The "Add step" sub-menu (for the right-click menu of the grid and the list).
@@ -20601,6 +20701,872 @@ V31_CellMenu(row, x, y) {
     m.Add("Other step actions...", (*) => item ? VMB_TreeMenu(s.TV, item, true, x, y) : 0)
     m.Show()
     return true
+}
+
+; ============================================================================
+; V31.1: Values (names you can use as =name), ask at start, counts up, today's date, and the Remember step
+;   settings["values"] = Array of Map("name", "n", "value", "10", "when", "fixed" / "ask" / "date" / "counts").
+;   Run time (editor AND exported player): V4Runner.V31Init builds the values, VM_Play shows the ask-at-start form.
+; ============================================================================
+
+; @summary The stored codes of the When column of the Values sheet.
+; @tags values, v31
+V31_WhenCodes() => ["fixed", "ask", "date", "counts"]
+
+; @summary The words the person sees in the When column (same order as V31_WhenCodes).
+; @tags values, v31
+V31_WhenTexts() => ["fixed", "ask at start", "today's date", "counts up"]
+
+; @summary The date format used when a today's date value has no format written.
+; @tags values, v31
+V31_DateDefault() => "MM/dd/yyyy"
+
+; @summary The words for a When code ("fixed" for anything unknown).
+; @returns String
+; @tags values, v31
+V31_WhenText(code) {
+    for i, c in V31_WhenCodes()
+        if c = code
+            return V31_WhenTexts()[i]
+    return "fixed"
+}
+
+; @summary The When code for what a person typed or picked ("" when it is not one of the four). Not case sensitive; "todays date" and "today" are fine.
+; @returns String
+; @tags values, v31
+V31_WhenCode(text) {
+    t := StrLower(Trim(String(text)))
+    t := StrReplace(t, "'", "")
+    switch t {
+        case "fixed": return "fixed"
+        case "ask at start", "ask": return "ask"
+        case "todays date", "today", "date": return "date"
+        case "counts up", "counts", "count up": return "counts"
+    }
+    return ""
+}
+
+; @summary The macro's Values rows (an Array of Maps; [] when it has none - old macros).
+; @returns Array
+; @tags values, v31
+V31_ValuesOf(settings) {
+    if settings is Map {
+        v := settings.Get("values", "")
+        if v is Array
+            return v
+    }
+    return []
+}
+
+; @summary The names of the macro's Values, in order (empty names left out).
+; @returns Array of names
+; @tags values, v31
+V31_ValueNames(settings) {
+    out := []
+    for item in V31_ValuesOf(settings)
+        if item is Map && Trim(String(item.Get("name", ""))) != ""
+            out.Push(Trim(String(item.Get("name", ""))))
+    return out
+}
+
+; @summary Checks a name for a Value (or a Remember step): letters, digits and _ only; not #; not a name the program uses; not a column of the
+;          List; not another value (allowValue = true skips that last check, for Remember which may fill an existing value; except = the
+;          row being renamed). Returns "" when fine, else a plain sentence.
+; @returns String
+; @tags values, v31
+V31_ValueNameError(name, settings, except := 0, allowValue := false) {
+    n := Trim(String(name))
+    if n = ""
+        return "A name cannot be empty."
+    if n = "#"
+        return "# is kept for the round number. Pick another name."
+    if !RegExMatch(n, "^[A-Za-z0-9_]+$")
+        return "A name can only have letters, digits and _ (no spaces). Try " . RegExReplace(n, "[^A-Za-z0-9_]+", "_") . "."
+    for b in ["clipboard", "date", "time", "row", "index"]
+        if StrLower(n) = b
+            return n . " is a name the program already uses. Pick another name."
+    for h in V30_Headers(settings)
+        if StrLower(Trim(h)) = StrLower(n)
+            return n . " is already a column of the List. Pick another name."
+    if !allowValue
+        for i, item in V31_ValuesOf(settings)
+            if i != except && item is Map && StrLower(Trim(String(item.Get("name", "")))) = StrLower(n)
+                return "There is already a value called " . n . "."
+    return ""
+}
+
+; @summary What one Value is worth: fixed = the Value; ask at start = the answer (or the Value when nothing was asked); today's date = today
+;          in the format written in Value (MM/dd/yyyy when empty); counts up = the Value (a whole number) plus the rounds already done.
+;          round = how many rounds are done (0 in round 1 and in a once run); asked = Map name -> answer.
+; @returns String / Integer
+; @tags values, run, v31
+V31_ValueAt(item, round, asked := "") {
+    name := Trim(String(item.Get("name", ""))), v := String(item.Get("value", "")), w := item.Get("when", "fixed")
+    switch w {
+        case "ask":
+            return asked is Map && asked.Has(name) ? String(asked[name]) : v
+        case "date":
+            fmt := Trim(v) = "" ? V31_DateDefault() : v
+            try return FormatTime(, fmt)
+            return v
+        case "counts":
+            return IsInteger(Trim(v)) ? Integer(Trim(v)) + Max(0, round) : v
+    }
+    return v
+}
+
+; @summary All Values as Map name -> text for a round (not case sensitive).
+; @returns Map
+; @tags values, v31
+V31_ValueMap(settings, round := 0, asked := "") {
+    m := Map()
+    m.CaseSense := false
+    for item in V31_ValuesOf(settings)
+        if item is Map && Trim(String(item.Get("name", ""))) != ""
+            m[Trim(String(item["name"]))] := String(V31_ValueAt(item, round, asked))
+    return m
+}
+
+; @summary The Values marked "ask at start", as an Array of Map("name", .., "value", ..) (value = the current one).
+; @returns Array
+; @tags values, v31
+V31_AskItems(settings) {
+    out := []
+    for item in V31_ValuesOf(settings)
+        if item is Map && item.Get("when", "fixed") = "ask" && Trim(String(item.Get("name", ""))) != ""
+            out.Push(Map("name", Trim(String(item["name"])), "value", String(item.Get("value", ""))))
+    return out
+}
+
+; @summary The names =name and {{name}} may use in cells: the List columns first, then the Values (no duplicates).
+; @returns Array of names
+; @tags values, v31
+V31_NamesAll(settings) {
+    out := [], seen := Map()
+    seen.CaseSense := false
+    for h in V30_Headers(settings) {
+        out.Push(h)
+        seen[Trim(h)] := 1
+    }
+    for n in V31_ValueNames(settings)
+        if !seen.Has(n) {
+            seen[n] := 1
+            out.Push(n)
+        }
+    return out
+}
+
+; @summary The row the Preview row shows: the List row's cells (padded to the number of columns), then one cell per Value (ask at start =
+;          the current value; counts up = start + row - 1; today's date = now). Without Values this is the List row as before.
+; @returns Array or ""
+; @tags values, preview, v31
+V31_PreviewRow(settings, number) {
+    base := V30_PreviewRowCells(settings, number)
+    vals := V31_ValueNames(settings)
+    if !vals.Length
+        return base
+    out := []
+    Loop V30_Headers(settings).Length
+        out.Push(base is Array && A_Index <= base.Length ? base[A_Index] : "")
+    seen := Map()
+    seen.CaseSense := false
+    for h in V30_Headers(settings)
+        seen[Trim(h)] := 1
+    for item in V31_ValuesOf(settings)
+        if item is Map {
+            n := Trim(String(item.Get("name", "")))
+            if n != "" && !seen.Has(n) {
+                seen[n] := 1
+                out.Push(String(V31_ValueAt(item, Max(0, number - 1), "")))
+            }
+        }
+    return out
+}
+
+; @summary Reads a Remember step as a person writes it: clipboard as name, or "text" as name (text may use =Column or {{...}}). A leading
+;          word Remember is fine. Returns {Ok, Error, Name, Value} where Value is the stored text ({{clipboard}} or the text).
+; @returns {Ok, Error, Name, Value}
+; @tags values, remember, v31
+V31_ParseRemember(text, settings) {
+    bad(msg) => {Ok: false, Error: msg, Name: "", Value: ""}
+    t := Trim(String(text))
+    t := RegExReplace(t, "i)^remember\s+", "")
+    if !RegExMatch(t, "is)^(.*\S)\s+as\s+(\S+)$", &m)
+        return bad("Write it like  clipboard as total  or  " . Chr(34) . "some text" . Chr(34) . " as total.")
+    what := Trim(m[1]), name := Trim(m[2])
+    err := V31_ValueNameError(name, settings, 0, true)
+    if err != ""
+        return bad(err)
+    if StrLower(what) = "clipboard"
+        return {Ok: true, Error: "", Name: name, Value: "{{clipboard}}"}
+    if StrLen(what) >= 2 && SubStr(what, 1, 1) = Chr(34) && SubStr(what, -1) = Chr(34) {
+        st := V30_ToStored(SubStr(what, 2, StrLen(what) - 2), V31_NamesAll(settings))
+        return st.Ok ? {Ok: true, Error: "", Name: name, Value: st.Text} : bad(st.Error)
+    }
+    return bad("Write it like  clipboard as total  or  " . Chr(34) . "some text" . Chr(34) . " as total  (the text goes in quotes).")
+}
+
+; @summary The Text cell of a Remember step: clipboard as name / "text" as name.
+; @returns String
+; @tags values, remember, v31
+V31_RememberText(node, names := "") {
+    v := String(node.Get("value", "")), q := Chr(34)
+    return (StrLower(v) = "{{clipboard}}" ? "clipboard" : q . V30_ToShown(v, names is Array ? names : []) . q) . " as " . node.Get("name", "?")
+}
+
+; @summary True for a Remember step (a Set block with the remember mark).
+; @tags values, remember, v31
+V31_IsRemember(node) => node is Map && node.Get("type", "") = "set" && V4_Bool(node.Get("remember", 0)) && !V4_Bool(node.Get("ask", 0))
+
+; @summary A new Remember step (a Set block underneath), remembering the clipboard as "name".
+; @returns Map
+; @tags values, remember, v31
+V31_NewRemember(name := "value1", value := "{{clipboard}}") => Map("type", "set", "name", name, "value", value, "remember", 1)
+
+; @summary Makes sure a Values row called name exists (a new row is "fixed" with an empty value). Returns true when a row was added.
+; @returns Boolean
+; @tags values, remember, v31
+V31_EnsureValueIn(settings, name) {
+    if !(settings is Map) || Trim(name) = ""
+        return false
+    for n in V31_ValueNames(settings)
+        if StrLower(n) = StrLower(Trim(name))
+            return false
+    if !(settings.Get("values", "") is Array)
+        settings["values"] := []
+    settings["values"].Push(Map("name", Trim(name), "value", "", "when", "fixed"))
+    return true
+}
+
+; @summary Works out one edited cell of the Values sheet without changing anything: col 1 = Name, 2 = Value, 3 = When. Returns
+;          {Ok, Error, Item} (Item = a changed copy of the row). Counts up needs a whole number; switching to counts up with no number
+;          writes 1, switching to today's date with no format writes MM/dd/yyyy.
+; @returns {Ok, Error, Item}
+; @tags values, edit, v31
+V31_EditValue(settings, pos, col, input) {
+    vals := V31_ValuesOf(settings)
+    if pos < 1 || pos > vals.Length || !(vals[pos] is Map)
+        return {Ok: false, Error: "There is no such row.", Item: ""}
+    item := vals[pos].Clone()
+    text := Trim(StrReplace(StrReplace(String(input), "`r", " "), "`n", " "))
+    if col = 1 {
+        err := V31_ValueNameError(text, settings, pos)
+        return err != "" ? {Ok: false, Error: err, Item: ""} : {Ok: true, Error: "", Item: (item["name"] := text, item)}
+    }
+    if col = 2 {
+        if item.Get("when", "fixed") = "counts" && !IsInteger(text)
+            return {Ok: false, Error: "Counts up needs a whole number to start from, for example 1.", Item: ""}
+        item["value"] := text
+        return {Ok: true, Error: "", Item: item}
+    }
+    code := V31_WhenCode(text)
+    if code = ""
+        return {Ok: false, Error: "Pick one of: " . V4_Join(V31_WhenTexts(), ", ") . ".", Item: ""}
+    oldWhen := item.Get("when", "fixed")
+    item["when"] := code
+    v := Trim(String(item.Get("value", "")))
+    if code = "counts" && !IsInteger(v)
+        item["value"] := "1"
+    else if code = "date" && oldWhen != "date"
+        item["value"] := V31_DateDefault()
+    return {Ok: true, Error: "", Item: item}
+}
+
+; @summary When a Value is renamed, steps that use {{old}} (Type text) and Remember steps of that name follow. Returns how many steps changed.
+; @returns Integer
+; @tags values, v31
+V31_RenameInSteps(blocks, old, newName) {
+    changed := 0
+    for node in VMF_Flatten(blocks) {
+        if !(node is Map)
+            continue
+        hit := false
+        for key in ["text", "value"]
+            if node.Has(key) && InStr(String(node[key]), "{{" . old . "}}") {
+                node[key] := StrReplace(String(node[key]), "{{" . old . "}}", "{{" . newName . "}}")
+                hit := true
+            }
+        if V31_IsRemember(node) && StrLower(String(node.Get("name", ""))) = StrLower(old) {
+            node["name"] := newName
+            hit := true
+        }
+        if hit
+            changed += 1
+    }
+    return changed
+}
+
+; @summary The one small form before step 1: a label (the name) and a box (the current value) for every "ask at start" value.
+;          Enter / OK keeps or changes them; Cancel (or Esc, or closing it) stops the run before step 1.
+;          Returns {Ok, Asked} (Asked = Map name -> text; Ok false = cancelled).
+; @returns {Ok, Asked}
+; @tags values, run, gui, v31
+V31_AskForm(items) {
+    g := Gui("+AlwaysOnTop +ToolWindow", "Values for this run")
+    g.SetFont("s9", "Segoe UI")
+    g.AddText("xm w380", "Check the values for this run. Enter keeps or changes them. Cancel stops before step 1.")
+    boxes := []
+    for item in items {
+        g.AddText("xm y+8 w380", item["name"])
+        boxes.Push(g.AddEdit("xm w380", item["value"]))
+    }
+    st := {Done: false, Ok: false}
+    ok := g.AddButton("xm y+14 w90 Default", "OK")
+    ca := g.AddButton("x+6 w90", "Cancel")
+    ok.OnEvent("Click", (*) => (st.Ok := true, st.Done := true))
+    ca.OnEvent("Click", (*) => (st.Done := true))
+    g.OnEvent("Escape", (*) => (st.Done := true))
+    g.OnEvent("Close", (*) => (st.Done := true))
+    g.Show("AutoSize Center")
+    try WinActivate("ahk_id " . g.Hwnd)
+    asked := Map()
+    asked.CaseSense := false
+    while !st.Done
+        Sleep(40)
+    if st.Ok
+        for i, item in items
+            asked[item["name"]] := Trim(boxes[i].Value)
+    try g.Destroy()
+    return {Ok: st.Ok, Asked: asked}
+}
+
+; @summary Before a run: when the macro has "ask at start" values, shows the form (V31_AskForm) and returns its answer; with none returns an
+;          empty answer and shows nothing.
+; @returns {Ok, Asked}
+; @tags values, run, v31
+V31_AskAtStart(settings) {
+    items := V31_AskItems(settings)
+    if !items.Length
+        return {Ok: true, Asked: Map()}
+    return V31_AskForm(items)
+}
+
+; @summary The names of the open macro's List columns followed by its Values (what =name may use in a cell).
+; @returns Array
+; @tags values, v31
+V31_NamesAllNow() {
+    s := VMB()
+    return s.Macro is Map ? V31_NamesAll(s.Macro.Get("settings", "")) : []
+}
+
+; @summary The open macro's settings (an empty Map when there is no macro).
+; @returns Map
+; @tags values, v31
+V31_SettingsNow() {
+    s := VMB()
+    return s.Macro is Map && s.Macro.Get("settings", "") is Map ? s.Macro["settings"] : Map()
+}
+
+; @summary True when the macro already has a Value with this name (not case sensitive).
+; @returns Boolean
+; @tags values, v31
+V31_HasValueNamed(settings, name) {
+    for n in V31_ValueNames(settings)
+        if StrLower(n) = StrLower(Trim(name))
+            return true
+    return false
+}
+
+; @summary A name not used yet by a List column or a Value: base, base2, base3 ... (the first one for "value" is value1).
+; @returns String
+; @tags values, v31
+V31_FreeName(base := "value") {
+    st := V31_SettingsNow()
+    n := 1
+    while V31_ValueNameError(base . n, st) != "" && n < 1000
+        n += 1
+    return base . n
+}
+
+; @summary After a step was changed in the grid: a Remember step creates its Values row when the name is new (editor only).
+; @tags values, remember, v31
+V31_AfterStepEdit(node) {
+    s := VMB()
+    if V31_IsRemember(node) && s.Macro is Map && s.Macro.Get("settings", "") is Map
+        if V31_EnsureValueIn(s.Macro["settings"], node.Get("name", "")) {
+            V31_ValRefresh()
+            VMB_Status("Remembering " . node["name"] . " - a new row was added on the Values sheet.")
+        }
+}
+
+; ----------------------------------------------------------------------------
+; V31.1: the Values sheet (a third tab; same grid / overlay editor / own undo approach as the List sheet)
+; ----------------------------------------------------------------------------
+
+; @summary Builds the Values sheet's controls (hidden): the buttons, the info line, the grid and its two cell editors (an Edit and a
+;          drop-down for the When column). None of them is in s.Ctl. Called from V30_Build.
+; @tags values, gui, v31
+V31_BuildValues(g) {
+    s := VMB()
+    b := s.ValBar := Map()
+    b["Add"] := g.AddButton("x10 y10 w96 h22 Hidden", "Add value")
+    b["Del"] := g.AddButton("x+4 yp w104 h22 Hidden", "Delete value")
+    b["Info"] := g.AddText("x+10 yp w400 h22 +0x200 Hidden", "")
+    b["Edit"] := g.AddEdit("x10 y10 w100 h22 Hidden +0x4000000")
+    b["Pick"] := g.AddDropDownList("x10 y10 w100 Hidden", V31_WhenTexts())
+    b["Add"].OnEvent("Click", (*) => V31_ValAdd())
+    b["Del"].OnEvent("Click", (*) => V31_ValDelete())
+    b["Edit"].OnEvent("LoseFocus", V31_OnValLose)
+    b["Pick"].OnEvent("LoseFocus", V31_OnValLose)
+    b["Pick"].OnCommand(9, V31_OnValPickDone)                  ; CBN_SELENDOK: a choice was clicked in the list
+    s.ValLV := g.AddListView("x10 y40 w600 h300 Grid -Multi +LV0x10000 +0x4000000 Hidden", ["Name", "Value", "When"])
+    s.ValLV.OnEvent("DoubleClick", V31_OnValDouble)
+    s.ValLV.OnEvent("Click", V31_OnValClick)
+    s.ValLV.OnEvent("ContextMenu", V31_OnValMenu)
+    OnMessage(0x100, V31_OnWmKeyDown)                          ; WM_KEYDOWN: typing on the Values sheet starts an edit
+    V31_ApplyValFont()
+}
+
+; @summary The Values sheet's font follows the grid zoom (same fonts as the List sheet).
+; @tags values, gui, v31
+V31_ApplyValFont() {
+    s := VMB()
+    if !s.ValLV
+        return
+    s.ValLV.SetFont("s" . V29_ZoomFont(9, s.GridZoom), "MS Shell Dlg 2")
+    s.ValLV.SetFont(, "Segoe UI")
+}
+
+; @summary The words on the Values tab: Values, or Values (3).
+; @returns String
+; @tags values, gui, v31
+V31_TabText(count) => count ? "Values (" . count . ")" : "Values"
+
+; @summary The sentence on the Values sheet's info line.
+; @returns String
+; @tags values, gui, v31
+V31_InfoText(count) => count
+    ? count . (count = 1 ? " value." : " values.") . "   Use one in a Type step as =name. Double-click a cell to change it."
+    : "No values yet. Add value makes a name you can use in a Type step as =name."
+
+; @summary Puts the Values sheet in place (called by V30_Place): the buttons under the Run line, the grid where the Steps grid is.
+; @tags values, gui, v31
+V31_PlaceValues(x, y, w, gy, gh, barH, show) {
+    s := VMB()
+    b := s.ValBar
+    if !(b is Map) || !b.Has("Add") || !s.ValLV || !(s.Macro is Map)
+        return
+    V31_ValFinish(false)
+    on := show && s.Sheet = "values"
+    if on {
+        bx := x
+        for name in ["Add", "Del"] {
+            b[name].GetPos(, , &wd)
+            b[name].Move(bx, y + barH + 4, wd, 22), bx += wd + 4
+        }
+        b["Info"].Move(bx + 6, y + barH + 4, Max(40, w - (bx - x) - 6), 22)
+        s.ValLV.Move(x, gy, w, gh)
+    }
+    for name in ["Add", "Del", "Info"]
+        if b[name].Visible != on
+            b[name].Visible := on
+    if s.ValLV.Visible != on
+        s.ValLV.Visible := on
+}
+
+; @summary Fills the Values sheet from the macro (Name | Value | When) and the info line and the tab text.
+; @tags values, gui, v31
+V31_ValFill() {
+    s := VMB()
+    lv := s.ValLV
+    if !lv || !(s.Macro is Map)
+        return
+    V31_ValCancel(false)
+    vals := V31_ValuesOf(s.Macro["settings"])
+    keep := lv.GetNext(0)
+    lv.Opt("-Redraw")
+    lv.Delete()
+    for item in vals
+        if item is Map
+            lv.Add("", Trim(String(item.Get("name", ""))), String(item.Get("value", "")), V31_WhenText(item.Get("when", "fixed")))
+    lv.ModifyCol(1, 160)
+    lv.ModifyCol(2, 280)
+    lv.ModifyCol(3, 150)
+    lv.Opt("+Redraw")
+    if keep && keep <= lv.GetCount()
+        lv.Modify(keep, "Select Focus Vis")
+    s.ValBar["Info"].Text := V31_InfoText(vals.Length)
+    try s.SheetTabs["Values"].Text := V31_TabText(vals.Length)
+}
+
+; @summary Brings the Values sheet and its tab up to date (when it is shown, or just the tab text).
+; @tags values, gui, v31
+V31_ValRefresh() {
+    s := VMB()
+    if !s.ValLV || !(s.Macro is Map)
+        return
+    if s.Sheet = "values" && s.View = "grid"
+        V31_ValFill()
+    else
+        try s.SheetTabs["Values"].Text := V31_TabText(V31_ValuesOf(s.Macro["settings"]).Length)
+}
+
+; @summary Remembers the Values as they are (for Ctrl+Z on the Values sheet).
+; @tags values, undo, v31
+V31_ValPush() {
+    s := VMB()
+    s.ValUndo.Push(JSON.Stringify(V31_ValuesOf(s.Macro["settings"])))
+    if s.ValUndo.Length > 40
+        s.ValUndo.RemoveAt(1)
+    s.ValRedo := []
+}
+
+; @summary A change to the Values is done: Dirty, autosave, the sheet and tab follow.
+; @tags values, v31
+V31_ValChanged() {
+    s := VMB()
+    s.Dirty := true
+    V7_ScheduleAutoSave()
+    VMB_UpdateTitle()
+    V31_ValRefresh()
+    V27_PlaceGrid()
+}
+
+; @summary Ctrl+Z / Ctrl+Y on the Values sheet: the Values as they were before the last change (or forward again).
+;          Steps changed by a rename are not changed back (use Ctrl+Z on the Steps sheet for them).
+; @tags values, undo, v31
+V31_ValUndo(redo := false) {
+    s := VMB()
+    from := redo ? s.ValRedo : s.ValUndo, to := redo ? s.ValUndo : s.ValRedo
+    if !from.Length
+        return VMB_Status(redo ? "Nothing to redo on the Values sheet." : "Nothing to undo on the Values sheet.")
+    V31_ValFinish(false)
+    to.Push(JSON.Stringify(V31_ValuesOf(s.Macro["settings"])))
+    s.Macro["settings"]["values"] := JSON.Parse(from.Pop())
+    V31_ValChanged()
+    VMB_Status(redo ? "Redone." : "Undone.")
+}
+
+; @summary Add value: a new row below the selected one (or at the end) with a free name (value1, value2 ...) and opens its Name cell.
+; @tags values, gui, v31
+V31_ValAdd() {
+    s := VMB()
+    if VM_IsRecording() || VM_IsPlaying() || !(s.Macro is Map)
+        return
+    V31_ValFinish(false)
+    st := s.Macro["settings"]
+    if V31_ValuesOf(st).Length >= 200
+        return VMB_Status("There can be at most 200 values.")
+    V31_ValPush()
+    if !(st.Get("values", "") is Array)
+        st["values"] := []
+    n := 1
+    while V31_ValueNameError("value" . n, st) != "" && n < 1000
+        n += 1
+    at := s.ValLV.GetNext(0)
+    pos := at ? at + 1 : st["values"].Length + 1
+    st["values"].InsertAt(Max(1, Min(pos, st["values"].Length + 1)), Map("name", "value" . n, "value", "", "when", "fixed"))
+    V31_ValChanged()
+    pos := Min(pos, s.ValLV.GetCount())
+    try s.ValLV.Modify(pos, "Select Focus Vis")
+    V31_ValOpen(pos, 1)
+}
+
+; @summary Delete value: removes the selected row.
+; @tags values, gui, v31
+V31_ValDelete() {
+    s := VMB()
+    if VM_IsRecording() || VM_IsPlaying() || !(s.Macro is Map)
+        return
+    V31_ValFinish(false)
+    st := s.Macro["settings"]
+    at := s.ValLV.GetNext(0)
+    if !at || at > V31_ValuesOf(st).Length
+        return VMB_Status("Click a row first, then Delete value.")
+    name := Trim(String(st["values"][at].Get("name", "")))
+    V31_ValPush()
+    st["values"].RemoveAt(at)
+    V31_ValChanged()
+    try s.ValLV.Modify(Min(at, s.ValLV.GetCount()), "Select Focus Vis")
+    VMB_Status("Value " . name . " deleted. A step that uses =" . name . " will stop the run until it is back. Ctrl+Z puts it back.")
+}
+
+; @summary Opens the editor on a Values cell (col 1 Name, 2 Value, 3 When = a drop-down). startText = a typed first character (or "").
+; @tags values, gui, v31
+V31_ValOpen(row, col, startText := "") {
+    s := VMB()
+    if VM_IsRecording() || VM_IsPlaying() || !s.ValLV || s.Sheet != "values" || s.View != "grid"
+        return false
+    V31_ValFinish(false)
+    vals := V31_ValuesOf(s.Macro["settings"])
+    if row < 1 || row > vals.Length || row > s.ValLV.GetCount() || col < 1 || col > 3 || !(vals[row] is Map)
+        return false
+    s.ValCol := col
+    V30_EnsureVisible(row, col, s.ValLV)
+    rect := V30_CellRect(row, col, s.ValLV)
+    if !IsObject(rect)
+        return false
+    item := vals[row]
+    orig := col = 1 ? Trim(String(item.Get("name", ""))) : col = 2 ? String(item.Get("value", "")) : V31_WhenText(item.Get("when", "fixed"))
+    s.ValEditRow := row, s.ValEditCol := col, s.ValEditOrig := orig, s.ValEditPick := col = 3
+    b := s.ValBar
+    if col = 3 {
+        pick := b["Pick"]
+        pick.SetFont("s" . V29_ZoomFont(9, s.GridZoom), "MS Shell Dlg 2"), pick.SetFont(, "Segoe UI")
+        choice := orig
+        if startText != ""
+            for t in V31_WhenTexts()
+                if StrLower(SubStr(t, 1, StrLen(startText))) = StrLower(startText) {
+                    choice := t
+                    break
+                }
+        try pick.Choose(choice)
+        pick.Move(rect.X, rect.Y, Max(rect.W, 130))
+        shown := pick
+    } else {
+        ed := b["Edit"]
+        ed.SetFont("s" . V29_ZoomFont(9, s.GridZoom), "MS Shell Dlg 2"), ed.SetFont(, "Segoe UI")
+        ed.Value := startText != "" ? startText : orig
+        ed.Move(rect.X, rect.Y, rect.W, rect.H)
+        shown := ed
+    }
+    s.ValEditOn := true
+    shown.Visible := true
+    DllCall("SetWindowPos", "Ptr", shown.Hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x43)
+    shown.Focus()
+    DllCall("RedrawWindow", "Ptr", shown.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x185)
+    if col != 3 {
+        n := StrLen(startText)
+        SendMessage(0xB1, startText != "" ? n : 0, startText != "" ? n : -1, b["Edit"])       ; EM_SETSEL
+    } else if startText = ""
+        PostMessage(0x14F, 1, 0, b["Pick"])                    ; CB_SHOWDROPDOWN
+    VMB_Status("Value " . ["name", "value", "When"][col] . ".   Enter saves, Tab goes on, Esc cancels.")
+    return true
+}
+
+; @summary Hides the Values cell editor (refocus = give the keyboard back to the sheet).
+; @tags values, gui, v31
+V31_ValHide(refocus := true) {
+    s := VMB()
+    if !(s.ValBar is Map) || !s.ValBar.Has("Edit")
+        return
+    s.ValEditOn := false
+    s.ValBar["Edit"].Visible := false
+    s.ValBar["Pick"].Visible := false
+    if refocus && s.ValLV && s.Sheet = "values" && s.View = "grid"
+        try s.ValLV.Focus()
+}
+
+; @summary Closes the editor and throws the typed text away.
+; @tags values, gui, v31
+V31_ValCancel(refocus := true) {
+    s := VMB()
+    if s.ValEditOn
+        V31_ValHide(refocus)
+}
+
+; @summary Closes the editor and keeps the text when it is fine (a refused text is dropped; the status bar says why).
+; @tags values, gui, v31
+V31_ValFinish(refocus := true) {
+    s := VMB()
+    if s.ValEditOn && !V31_ValCommit(refocus)
+        V31_ValCancel(refocus)
+}
+
+; @summary Writes the editor's text into the Values (one Ctrl+Z undoes it). A refused text keeps the editor open and says why in the
+;          status bar. A renamed Value renames {{old}} in the steps too. Returns true when the editor is closed.
+; @returns Boolean
+; @tags values, gui, v31
+V31_ValCommit(refocus := true) {
+    s := VMB()
+    if !s.ValEditOn
+        return true
+    b := s.ValBar
+    input := s.ValEditPick ? b["Pick"].Text : b["Edit"].Value
+    pos := s.ValEditRow, col := s.ValEditCol
+    if VM_IsRecording() || VM_IsPlaying() {
+        V31_ValHide(false)
+        return true
+    }
+    if input == s.ValEditOrig {
+        V31_ValHide(refocus)
+        return true
+    }
+    st := s.Macro["settings"]
+    plan := V31_EditValue(st, pos, col, input)
+    if !plan.Ok {
+        VMB_Status(plan.Error)
+        if !s.ValEditPick {
+            b["Edit"].Focus()
+            SendMessage(0xB1, 0, -1, b["Edit"])                ; EM_SETSEL: select all
+        }
+        return false
+    }
+    V31_ValHide(refocus)
+    old := Trim(String(st["values"][pos].Get("name", "")))
+    V31_ValPush()
+    st["values"][pos] := plan.Item
+    msg := "Changed. Ctrl+Z undoes it."
+    if col = 1 && old != plan.Item["name"] {
+        VMB_Snapshot()
+        n := V31_RenameInSteps(s.Macro["blocks"], old, plan.Item["name"])
+        msg := "Value " . old . " is now called " . plan.Item["name"] . "." . (n ? "  " . n . (n = 1 ? " step was" : " steps were") . " changed to the new name." : "")
+        V31_ValChanged()
+        VMB_Refresh()
+    } else
+        V31_ValChanged()
+    VMB_Status(msg)
+    return true
+}
+
+; @summary Enter / Tab / Shift+Tab in the Values editor: saves, then moves (Enter = the cell below is selected, Tab = the next cell opens).
+; @tags values, gui, v31
+V31_ValEnter(where) {
+    s := VMB()
+    row := s.ValEditRow, col := s.ValEditCol
+    if !V31_ValCommit()
+        return
+    n := s.ValLV.GetCount()
+    if where = "down" {
+        if row < n
+            s.ValLV.Modify(row + 1, "Select Focus Vis")
+        return
+    }
+    col += where = "back" ? -1 : 1
+    if col > 3
+        col := 1, row += 1
+    else if col < 1
+        col := 3, row -= 1
+    if row < 1 || row > n
+        return
+    s.ValLV.Modify(row, "Select Focus Vis")
+    V31_ValOpen(row, col)
+}
+
+; @summary The editor lost the keyboard focus (clicked elsewhere): the text is kept when it is fine.
+; @tags values, gui, v31
+V31_OnValLose(ctl, *) {
+    s := VMB()
+    if !s.ValEditOn || DllCall("GetFocus", "Ptr") = ctl.Hwnd
+        return
+    V31_ValFinish(false)
+}
+
+; @summary A choice was clicked in the When drop-down: save it.
+; @tags values, gui, v31
+V31_OnValPickDone(*) {
+    s := VMB()
+    if s.ValEditOn
+        V31_ValCommit()
+}
+
+; @summary Double-click a Values cell: edit it.
+; @tags values, gui, v31
+V31_OnValDouble(lv, row) {
+    if !row
+        return
+    hit := V30_HitCell(lv)
+    if hit.Row = row && hit.Col >= 1
+        V31_ValOpen(row, hit.Col)
+}
+
+; @summary Click a Values cell: it becomes the current cell (F2 / Enter edits it).
+; @tags values, gui, v31
+V31_OnValClick(lv, row) {
+    s := VMB()
+    if !row
+        return
+    hit := V30_HitCell(lv)
+    if hit.Row = row && hit.Col >= 1 && hit.Col <= 3
+        s.ValCol := hit.Col
+}
+
+; @summary Right-click on the Values sheet: Add value / Delete value.
+; @tags values, gui, v31
+V31_OnValMenu(lv, row, isRight, x, y) {
+    m := Menu()
+    m.Add("Add value", (*) => V31_ValAdd())
+    m.Add("Delete value", (*) => V31_ValDelete())
+    m.Show()
+}
+
+; @summary F2 / Enter on the Values sheet: edit the current cell.
+; @tags values, gui, v31
+V31_ValOpenCurrent() {
+    s := VMB()
+    row := s.ValLV.GetNext(0)
+    if row
+        V31_ValOpen(row, s.ValCol)
+}
+
+; @summary Left / Right on the Values sheet: moves the current column.
+; @tags values, gui, v31
+V31_ValMoveCol(step) {
+    s := VMB()
+    s.ValCol := Max(1, Min(3, s.ValCol + step))
+    VMB_Status("Column: " . ["Name", "Value", "When"][s.ValCol] . "   (F2 or Enter edits the cell)")
+}
+
+; @summary Delete on the Values sheet: empties the current Value cell (a Name or When cell cannot be empty).
+; @tags values, gui, v31
+V31_ValClearCell() {
+    s := VMB()
+    row := s.ValLV.GetNext(0)
+    if !row
+        return
+    if s.ValCol != 2
+        return VMB_Status("Only a Value can be emptied. Change a name or When by typing.")
+    st := s.Macro["settings"]
+    plan := V31_EditValue(st, row, 2, "")
+    if !plan.Ok
+        return VMB_Status(plan.Error)
+    V31_ValPush()
+    st["values"][row] := plan.Item
+    V31_ValChanged()
+    VMB_Status("Value emptied. Ctrl+Z undoes it.")
+}
+
+; @summary Ctrl+C on the Values sheet: the current cell's text on the clipboard.
+; @tags values, gui, v31
+V31_ValCopyCell() {
+    s := VMB()
+    row := s.ValLV.GetNext(0)
+    if !row
+        return
+    A_Clipboard := s.ValLV.GetText(row, s.ValCol)
+    VMB_Status("Copied the cell.")
+}
+
+; @summary True while the Values grid has the keyboard focus (for its hotkeys): this window active, Values sheet shown, no editor open,
+;          not recording or playing.
+; @tags values, hotkey, v31
+V31_ValFocused(*) {
+    s := VMB()
+    return s.ValLV && s.Gui && s.View = "grid" && s.Sheet = "values" && !s.ValEditOn && !VM_IsPlaying() && !VM_IsRecording()
+        && WinActive("ahk_id " . s.Gui.Hwnd) && DllCall("GetFocus", "Ptr") = s.ValLV.Hwnd
+}
+
+; @summary True while the Values cell editor (the Edit or the drop-down) has the keyboard focus (for Enter / Tab / Esc).
+; @tags values, hotkey, v31
+V31_ValEditFocused(*) {
+    s := VMB()
+    if !s.ValEditOn || !s.Gui || VM_IsPlaying() || VM_IsRecording() || !WinActive("ahk_id " . s.Gui.Hwnd)
+        return false
+    focus := DllCall("GetFocus", "Ptr")
+    pick := s.ValBar["Pick"].Hwnd
+    return focus = s.ValBar["Edit"].Hwnd || focus = pick || DllCall("IsChild", "Ptr", pick, "Ptr", focus)
+}
+
+; @summary WM_KEYDOWN monitor: a letter, digit or _ typed on the Values sheet starts editing the current cell with that character.
+; @tags values, gui, v31
+V31_OnWmKeyDown(wParam, lParam, msg, hwnd) {
+    s := VMB()
+    if !s.ValLV || hwnd != s.ValLV.Hwnd || s.ValEditOn || s.Sheet != "values" || VM_IsRecording() || VM_IsPlaying() || GetKeyState("Ctrl") || GetKeyState("Alt")
+        return
+    shifted := GetKeyState("Shift")
+    if wParam >= 0x41 && wParam <= 0x5A
+        ch := (shifted != GetKeyState("CapsLock", "T")) ? Chr(wParam) : StrLower(Chr(wParam))
+    else if wParam >= 0x30 && wParam <= 0x39 && !shifted
+        ch := Chr(wParam)
+    else if wParam >= 0x60 && wParam <= 0x69
+        ch := Chr(wParam - 0x30)
+    else if wParam = 0xBD && shifted
+        ch := "_"
+    else
+        return
+    row := s.ValLV.GetNext(0)
+    if row
+        V31_ValOpen(row, s.ValCol, ch)
 }
 
 ; ============================================================================
@@ -22457,8 +23423,91 @@ V4_SelfTest(path) {
         v31Bad := 0
         for v31Kd in V31_StepKinds()
             v31Bad += V31_NewStep(v31Kd[2]) is Map ? 0 : 1
-        check("V31 add step: every kind of the menu makes a step, an unknown kind does not", v31Bad . "|" . V31_StepKinds().Length . "|" . (V31_NewStep("zzz") = ""), "0|6|1")
+        check("V31 add step: every kind of the menu makes a step, an unknown kind does not", v31Bad . "|" . V31_StepKinds().Length . "|" . (V31_NewStep("zzz") = ""), "0|7|1")
         check("V31 add step: the new steps validate", VM_Validate(Map("blocks", [V31_NewStep("text"), V31_NewStep("keys"), V31_NewStep("delay"), V31_NewStep("waitwin")])).Length, 0)
+
+        ; ---- V31.1: Values (pure parts, cells and the runner) ----
+        v31vSet := Map("list", V30_NewList(["Name", "Status"], [["Anna", "On"], ["Bob", "Off"], ["Cy", "On"]]),
+            "values", [Map("name", "greeting", "value", "Hello", "when", "fixed"), Map("name", "n", "value", "10", "when", "counts"),
+                Map("name", "who", "value", "friend", "when", "ask"), Map("name", "d", "value", "yyyy", "when", "date")])
+        check("V31.1 when words: codes <-> words, unknown and loose spellings", V31_WhenText("ask") . "|" . V31_WhenText("counts") . "|" . V31_WhenText("zz") . "|" . V31_WhenCode("Ask at start") . "|" . V31_WhenCode("today's date") . "|" . V31_WhenCode("todays date") . "|" . V31_WhenCode("COUNTS UP") . "|" . V31_WhenCode("fixed") . "|" . V31_WhenCode("nope") . "|" . V31_WhenCode(""), "ask at start|counts up|fixed|ask|date|date|counts|fixed||")
+        check("V31.1 name: letters, digits, underscore are fine", V31_ValueNameError("total_2", v31vSet) . V31_ValueNameError("A", v31vSet) . "|", "|")
+        check("V31.1 name: empty, #, spaces, odd signs are refused with a sentence", V31_ValueNameError("", v31vSet) . "|" . V31_ValueNameError("#", v31vSet) . "|" . V31_ValueNameError("my name", v31vSet) . "|" . V31_ValueNameError("a-b", v31vSet), "A name cannot be empty.|# is kept for the round number. Pick another name.|A name can only have letters, digits and _ (no spaces). Try my_name.|A name can only have letters, digits and _ (no spaces). Try a_b.")
+        check("V31.1 name: a List column (any case), a built-in name and another value are refused", V31_ValueNameError("name", v31vSet) . "|" . V31_ValueNameError("Clipboard", v31vSet) . "|" . V31_ValueNameError("GREETING", v31vSet) . "|" . V31_ValueNameError("greeting", v31vSet, 1) . "|" . V31_ValueNameError("greeting", v31vSet, 0, true) . "|", "name is already a column of the List. Pick another name.|Clipboard is a name the program already uses. Pick another name.|There is already a value called GREETING.|||")
+        check("V31.1 value at: fixed, ask (answer / no answer), counts up (round 0 and 2, not a number), today's date (format / empty = default)", V31_ValueAt(v31vSet["values"][1], 5) . "|" . V31_ValueAt(v31vSet["values"][3], 0, Map("who", "Zed")) . "|" . V31_ValueAt(v31vSet["values"][3], 0) . "|" . V31_ValueAt(v31vSet["values"][2], 0) . "|" . V31_ValueAt(v31vSet["values"][2], 2) . "|" . V31_ValueAt(Map("name", "c", "value", "x", "when", "counts"), 3) . "|" . V31_ValueAt(v31vSet["values"][4], 0) . "|" . (V31_ValueAt(Map("name", "d", "when", "date"), 0) = FormatTime(, "MM/dd/yyyy")), "Hello|Zed|friend|10|12|x|" . A_Year . "|1")
+        check("V31.1 value map and ask items: all names, only ask-at-start ones in the form", V31_ValueMap(v31vSet, 1, Map("who", "Q"))["n"] . "|" . V31_ValueMap(v31vSet, 1, Map("who", "Q"))["WHO"] . "|" . V31_AskItems(v31vSet).Length . "|" . V31_AskItems(v31vSet)[1]["name"] . "|" . V31_AskItems(v31vSet)[1]["value"] . "|" . V31_AskItems(Map()).Length, "11|Q|1|who|friend|0")
+        check("V31.1 names for cells: list columns first, then Values; old macros give just the columns; no macro gives nothing", V4_Join(V31_NamesAll(v31vSet), ",") . "|" . V4_Join(V31_NamesAll(Map("list", v31vSet["list"])), ",") . "|" . V31_NamesAll(Map()).Length, "Name,Status,greeting,n,who,d|Name,Status|0")
+        v31vRow := V31_PreviewRow(v31vSet, 2)
+        check("V31.1 preview row: list cells, then Values (counts up = start + row - 1, ask = current value)", V4_Join(v31vRow, ","), "Bob,Off,Hello,11,friend," . A_Year)
+        check("V31.1 preview row without Values is the List row as before; with Values and no list row the list cells are empty", V4_Join(V31_PreviewRow(Map("list", v31vSet["list"]), 3), ",") . "|" . (V31_PreviewRow(Map("list", V30_NewList(["A"], [])), 1) = "") . "|" . V4_Join(V31_PreviewRow(Map("values", v31vSet["values"]), 3), ","), "Cy,On|1|Hello,12,friend," . A_Year)
+        v31vNames := V31_NamesAll(v31vSet)
+        check("V31.1 =name in a Type cell: =n is stored as {{n}} and shown again; an unknown name is refused with the names", V30_ToStored("=n", v31vNames).Text . "|" . V30_ToStored("=GREETING", v31vNames).Text . "|" . V30_ToShown("{{n}}", v31vNames) . "|" . V30_ToStored("=zzz", v31vNames).Ok, "{{n}}|{{greeting}}|=n|0")
+        check("V31.1 preview cell: =n → the counted value for the preview row, =greeting for a fixed one", V30_TextCell("{{n}}", v31vNames, v31vRow, 2) . "|" . V30_TextCell("{{greeting}}", v31vNames, v31vRow, 2) . "|" . V30_TextCell("{{who}}", v31vNames, v31vRow, 2), "=n → " . Chr(34) . "11" . Chr(34) . "|=greeting → " . Chr(34) . "Hello" . Chr(34) . "|=who → " . Chr(34) . "friend" . Chr(34))
+        v31vA := Map("type", "text", "text", "a", "when", "n > 10")
+        v31vRule(number) => V31_PreviewDecisions([v31vA], V31_RuleNames(v31vNames), (nm) => V31_PreviewValue(nm, v31vNames, V31_PreviewRow(v31vSet, number), number), (t) => false)[v31vA].Skip
+        check("V31.1 rule preview: n > 10 skips round 1 (n = 10) and not round 2 (n = 11)", v31vRule(1) . "|" . v31vRule(2), "1|0")
+        v31vRm := V31_ParseRemember("clipboard as total", v31vSet)
+        check("V31.1 remember: clipboard as name", v31vRm.Ok . "|" . v31vRm.Name . "|" . v31vRm.Value, "1|total|{{clipboard}}")
+        v31vRm := V31_ParseRemember("Remember " . Chr(34) . "Hi =Name" . Chr(34) . " as msg_1", v31vSet)
+        check("V31.1 remember: a leading Remember is fine; quoted text is kept (only a whole =Column is turned into {{Column}})", v31vRm.Ok . "|" . v31vRm.Name . "|" . v31vRm.Value . "|" . V31_ParseRemember(Chr(34) . "=Name" . Chr(34) . " as x", v31vSet).Value . "|" . V31_ParseRemember(Chr(34) . "{{Name}}-1" . Chr(34) . " as x", v31vSet).Value, "1|msg_1|Hi =Name|{{Name}}|{{Name}}-1")
+        check("V31.1 remember: bad text, unquoted text, a List column name, a built-in name, a bad name and a bad =name get a sentence; an existing Value is fine", V31_ParseRemember("clipboard", v31vSet).Ok . V31_ParseRemember("hello as x", v31vSet).Ok . V31_ParseRemember("clipboard as Name", v31vSet).Ok . V31_ParseRemember("clipboard as date", v31vSet).Ok . V31_ParseRemember("clipboard as a-b", v31vSet).Ok . V31_ParseRemember(Chr(34) . "=zzz" . Chr(34) . " as x", v31vSet).Ok . V31_ParseRemember("clipboard as greeting", v31vSet).Ok, "0000001")
+        check("V31.1 remember: the error names the column clash in plain words", V31_ParseRemember("clipboard as Name", v31vSet).Error, "Name is already a column of the List. Pick another name.")
+        v31vN := V31_NewRemember("total", "{{clipboard}}")
+        check("V31.1 remember step: a Set block underneath, Action Remember, Text cell clipboard as total, validates", V31_IsRemember(v31vN) . "|" . v31vN["type"] . "|" . V27_ActionText(v31vN) . "|" . V27_TextText(v31vN) . "|" . VM_Validate(Map("blocks", [v31vN])).Length . "|" . V27_ActionText(Map("type", "set", "name", "a", "value", "b")), "1|set|Remember|clipboard as total|0|Other")
+        check("V31.1 remember cell: editable as text and shows clipboard as name; a plain Set block stays not editable", V28_Editable(v31vN, "text") . "|" . V28_EditText(v31vN, "text") . "|" . V28_Editable(Map("type", "set", "name", "a", "value", "b"), "text") . "|", "text|clipboard as total||")
+        v31vC := V28_ApplyCell(v31vN, "text", Chr(34) . "abc" . Chr(34) . " as total2")
+        check("V31.1 remember cell: typed text as name is stored (name, value) and shown as one plain row", v31vC.Ok . "|" . v31vN["name"] . "|" . v31vN["value"] . "|" . V27_TextText(v31vN) . "|" . V28_ApplyCell(v31vN, "text", "nonsense").Ok, "1|total2|abc|" . Chr(34) . "abc" . Chr(34) . " as total2|0")
+        v31vE := Map("values", [Map("name", "a", "value", "1", "when", "fixed")])
+        check("V31.1 remember: a new name makes its Values row (fixed, empty), an existing one does not", V31_EnsureValueIn(v31vE, "tot") . V31_EnsureValueIn(v31vE, "TOT") . V31_EnsureValueIn(v31vE, "a") . "|" . V31_ValuesOf(v31vE).Length . "|" . v31vE["values"][2]["when"] . "|" . V31_EnsureValueIn(Map(), "q"), "100|2|fixed|1")
+        check("V31.1 edit cell: rename ok / clash with a List column / clash with another value / bad sign / same name again", V31_EditValue(v31vSet, 1, 1, "hi").Item["name"] . "|" . V31_EditValue(v31vSet, 1, 1, "Name").Ok . "|" . V31_EditValue(v31vSet, 1, 1, "n").Ok . "|" . V31_EditValue(v31vSet, 1, 1, "a b").Ok . "|" . V31_EditValue(v31vSet, 1, 1, "greeting").Ok . "|" . V31_EditValue(v31vSet, 1, 1, "n").Error, "hi|0|0|0|1|There is already a value called n.")
+        check("V31.1 edit cell: counts up needs a whole number; switching to counts up / date fills a start; planning does not change the row", V31_EditValue(v31vSet, 2, 2, "x").Ok . "|" . V31_EditValue(v31vSet, 2, 2, "5").Item["value"] . "|" . V31_EditValue(v31vSet, 1, 3, "counts up").Item["value"] . "|" . V31_EditValue(v31vSet, 1, 3, "today's date").Item["value"] . "|" . V31_EditValue(v31vSet, 1, 3, "blah").Ok . "|" . v31vSet["values"][1]["when"] . "|" . V31_EditValue(v31vSet, 9, 1, "q").Ok, "0|5|1|MM/dd/yyyy|0|fixed|0")
+        v31vSteps := [Map("type", "text", "text", "{{greeting}} x {{n}}"), V31_NewRemember("greeting", "abc"), Map("type", "text", "text", "plain")]
+        check("V31.1 rename follows into steps: {{old}} in Type text and the Remember step's name", V31_RenameInSteps(v31vSteps, "greeting", "hi") . "|" . v31vSteps[1]["text"] . "|" . v31vSteps[2]["name"] . "|" . v31vSteps[3]["text"], "2|{{hi}} x {{n}}|hi|plain")
+        v31vOld := Map("format", "VisualMacro", "version", 4, "settings", Map(), "blocks", [Map("type", "text", "text", "x")])
+        check("V31.1 old macros: no values, same names for cells, the runner builds nothing", V31_ValuesOf(v31vOld["settings"]).Length . "|" . V31_NamesAll(v31vOld["settings"]).Length . "|" . V4Runner(v31vOld, {}).Vals.Count . "|" . V4Runner(v31vOld, {}).Counts.Count, "0|0|0|0")
+        v31vRun(settings, blocks, mode := "list", asked := "") {         ; a run built like Play does (list / times / once), with the answers of the ask-at-start form given
+            m := Map("format", "VisualMacro", "version", 4, "name", "t", "settings", Map("onFail", "coords", "runMode", mode), "blocks", blocks)
+            for k, v in settings
+                m["settings"][k] := v
+            b := V30_BuildRun(m)
+            o := {Asked: asked is Map ? asked : Map()}
+            if mode = "list"
+                o.Data := V30_ListData(m["settings"]), o.FirstRow := 1, o.LastRow := 0
+            r := V4Runner(b.Macro, o)
+            r.Vars["out"] := ""
+            res := {Runner: r, Error: "", Signal: ""}
+            try res.Signal := r.Run(b.Macro["blocks"])
+            catch as e
+                res.Error := e.Message
+            return res
+        }
+        v31vLine := [v31Out("{{greeting}} {{Name}} {{n}} {{who}}|")]
+        v31vX := v31vRun(v31vSet, v31vLine, "list", Map("who", "Zed"))
+        check("V31.1 run (list): fixed, list column, counts up (10, 11, 12) and the answer of the ask-at-start form", v31vX.Runner.Vars["out"] . v31vX.Error, "Hello Anna 10 Zed|Hello Bob 11 Zed|Hello Cy 12 Zed|")
+        v31vX := v31vRun(v31vSet, v31vLine, "list")
+        check("V31.1 run (list): without an answer the shown value is kept (ask at start = the Value)", v31vX.Runner.Vars["out"] . v31vX.Error, "Hello Anna 10 friend|Hello Bob 11 friend|Hello Cy 12 friend|")
+        v31vX := v31vRun(v31vSet, [v31Out("{{n}},{{n}}|"), v31Out("{{d}}|")], "list")
+        check("V31.1 run (list): a counts up value is the same twice in one row; today's date uses the format written in Value", v31vX.Runner.Vars["out"] . v31vX.Error, "10,10|" . A_Year . "|11,11|" . A_Year . "|12,12|" . A_Year . "|")
+        v31vX := v31vRun(Map("values", v31vSet["values"]), [v31Out("{{n}}-"), v31Out("{{n}}")], "once")
+        check("V31.1 run (once): counts up stays at the start value", v31vX.Runner.Vars["out"] . v31vX.Error, "10-10")
+        v31vX := v31vRun(Map("values", v31vSet["values"], "runTimes", 3), [v31Out("{{n}};")], "times")
+        check("V31.1 run (times): counts up starts at Value and goes up by 1 each round", v31vX.Runner.Vars["out"] . v31vX.Error, "10;11;12;")
+        v31vX := v31vRun(v31vSet, [v31Out("{{Name}}", "n > 10"), v31Out("|")], "list")
+        check("V31.1 run: Only when n > 10 skips row 1 only (n = 10 there)", v31vX.Runner.Vars["out"] . v31vX.Error, "|Bob|Cy|")
+        v31vX := v31vRun(v31vSet, [v31Out("{{Name}}", "greeting = hello and who = Zed"), v31Out("|")], "list", Map("who", "Zed"))
+        check("V31.1 run: rules may use fixed and asked Values together (text compare ignores case)", v31vX.Runner.Vars["out"] . v31vX.Error, "Anna|Bob|Cy|")
+        v31vX := v31vRun(Map("values", [Map("name", "Name", "value", "ValueWins?", "when", "fixed")], "list", V30_NewList(["Name"], [["Anna"]])), [v31Out("{{Name}}")], "list")
+        check("V31.1 run: lookup order - the list row comes before a Value of the same name", v31vX.Runner.Vars["out"] . v31vX.Error, "Anna")
+        v31vX := v31vRun(Map("values", [Map("name", "v", "value", "val", "when", "fixed")]), [Map("type", "set", "name", "v", "value", "var"), v31Out("{{v}}")], "once")
+        check("V31.1 run: lookup order - a Value comes before a runner variable of the same name", v31vX.Runner.Vars["out"] . v31vX.Error, "val")
+        v31vX := v31vRun(Map("values", [Map("name", "v", "value", "val", "when", "fixed"), Map("name", "k", "value", "5", "when", "counts")]),
+            [V31_NewRemember("v", "new"), V31_NewRemember("k", "z"), v31Out("{{v}}{{k}}")], "once")
+        check("V31.1 run: a Remember step changes a Value during the run (also a counts up one)", v31vX.Runner.Vars["out"] . v31vX.Error, "newz")
+        v31vX := v31vRun(Map(), [V31_NewRemember("fresh", "abc"), v31Out("{{fresh}}")], "once")
+        check("V31.1 run: a Remember step for a name that has no Values row still works", v31vX.Runner.Vars["out"] . v31vX.Error, "abc")
+        v31vX := v31vRun(Map("onFail", "stop"), [v31Out("{{nope}}")], "once")
+        check("V31.1 run: a name that does not exist stops the run with a sentence naming it", (InStr(v31vX.Error, "nope") > 0) . "|" . v31vX.Runner.Vars["out"], "1|")
+        check("V31.1 grid: a Type step =n shows the preview in the Text cell when the macro has Values; Remember is its own Action", V27_Cells(Map("type", "text", "text", "{{n}}"), Map("Settings", v31vSet, "Preview", 3))["text"] . "|" . V27_Cells(V31_NewRemember("t", "{{clipboard}}"), Map("Settings", v31vSet))["action"], "=n → " . Chr(34) . "12" . Chr(34) . "|Remember")
 
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
