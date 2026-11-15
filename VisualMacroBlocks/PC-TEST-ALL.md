@@ -1,4 +1,4 @@
-# PC test - one sheet for V19 to V31
+# PC test - one sheet for V19 to V32
 
 File: `VisualMacroBlocks-makecode-telek-V26-pccheck.ahk2`. This replaces the separate V21 / V22 / V23 / V24 / V25 checklists
 (those files stay in the folder, but you do not need them). Nothing here was ever run on a real Windows PC yet.
@@ -91,3 +91,20 @@ Use Notepad. Make a list with the columns `Name`, `Status`, `Amount` and four ro
 10. On the Steps sheet make Type steps `=greeting`, a space, `=Name`, a space, `=n`, a space, `=who`, then Press Enter (type the `=` names in the Text cell; the cell then reads `=greeting → "Hello"`, `=n → "10"` ... and follows the Preview row: `=n` shows 10, 11, 12). Add a last Type step `!` and give it the rule `n > 10`. Choose **for each row of the List** and press **Play**. A small form `Values for this run` appears **before step 1** with one box (`who`, showing `friend`): type `Zed`, Enter. Notepad must read exactly `Hello Anna 10 Zed` / `Hello Bob 11 Zed!` / `Hello Cy 12 Zed!`. Play again and press **Cancel**: nothing is typed and the status bar says `Stopped before step 1`.
 11. Right-click a row -> **Add step** -> **Remember clipboard as...**, copy some text, double-click its Text cell and type `clipboard as total` (or `"Bye" as total`; a new name makes its row on the Values sheet). A later Type step `=total` types it. The Action column says **Remember**.
 12. **Exported player**: use Export (one-file player) for a macro with an `ask at start` value and run the exported file: it asks the small form before step 1 and counts up / today's date work the same. An old macro (no Values) shows no Values rows and plays as before.
+
+## 8. Rows, filters, Find (V32 file: `VisualMacroBlocks-makecode-telek-V32-rows.ahk2`)
+
+Open a macro with at least 6 steps (Type steps with different texts are easiest) in Grid view, Steps sheet, Step order, no filter.
+
+1. Click row 3, press **Alt+Down**: the row moves one place down (check the order in the # / Text columns). **Alt+Up** moves it back. **Ctrl+Z** undoes each move. Same row stays selected and the green cell cursor stays in its column.
+2. Press **Shift+Down** twice: three rows are shaded light blue (the last one in the normal blue). **Alt+Down** moves all three together; **Ctrl+Shift+D** duplicates all three (copies appear below them); **Ctrl+Z** undoes. Click a single row: the shading goes.
+3. Press **Shift+Delete** on one row: one box asks (only the first time since the program started), Yes deletes it. Do it again on another row: no box. **Ctrl+Z** brings both back. Shift+click a second row to extend the range (mouse - not tested under Wine) and delete the range.
+4. **Ctrl+Shift+plus** (Ctrl+Shift+= on most keyboards): a new Type step `text` appears below the selected row. Press F2 on its Text cell and type something. **Ctrl+Z** twice removes it.
+5. Right-click a row: Insert step above / below (the Add step kinds), Duplicate row, Delete row, Move up, Move down, Turn off / on, More step actions... Try each once. Right-click a Type **Text** cell or an **Only when** cell: the small menu now also has **Row actions...**.
+6. Click a column title (sort), then press Alt+Down on a row: the status bar says `Sort and filter are on: switch to Step order to move rows.` and nothing moves. Press **Step order** and it works again. Same with the filter box and the two drop-downs.
+7. **Filter arrows**: every column title ends with `▾` (if you see an empty box instead of the arrow, tell me - it is only the font). Click the **right end** of the Program title (not the middle): a small list opens under the title with a search box, **(Select all)** and the values. Untick one program, press **OK**: only the other rows show, the title now ends with `▼=`, the status bar says `Header filter on Program`. Do the same on **Action**: both filters work together. Clicking the middle of a title still sorts.
+8. With a header filter on, type in the filter box too: all of them work together. **Clear** removes all of them. Start a run with a filter on: the filter is off while it runs and comes back after.
+9. **Find**: click the grid, press **Ctrl+F**. A Find bar opens above the grid. Type part of a text: the cell cursor jumps to the first match and the bar says `1 of N`. **Enter** or **F3** = next, **Shift+Enter** or **Shift+F3** = previous, it wraps round. **Esc** closes the bar. No row is hidden. Do it on the **List** and **Values** tabs too.
+10. Make a macro in List view (not the grid) with a **Repeat 3 times** block with two steps inside. Switch to Grid: a shaded band row `Repeat 3 times` and its two steps indented under it. F2 or typing on the band row does nothing but say it cannot be edited. Click a title to sort: the band rows disappear; **#** or **Step order** brings them back. Alt+Down on a step moves it inside its block only.
+11. **List view** (the tree) is unchanged: Alt+Down, Shift+Delete and Ctrl+F do nothing there; the old Delete / Move buttons work as before. An old macro with no loop blocks looks and plays exactly as in V31.
+12. Windows scaling 125 % / 150 %: the arrow zone of a title is 18 px (scaled); check that a click at the arrow end opens the list and not the sort, and that the list opens right under the title. Also check the light-blue range shading and the band row colours are easy to read.

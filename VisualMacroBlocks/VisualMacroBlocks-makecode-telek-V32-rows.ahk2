@@ -1,3 +1,7 @@
+; VisualMacroBlocks-makecode-telek-V32
+; V32 = V31 + rows like Excel rows: right-click a row (Insert step above / below, Duplicate, Delete, Move, Turn off), Alt+Up / Alt+Down move, Shift+Delete deletes,
+;       Ctrl+Shift+plus inserts a Type step, Ctrl+Shift+D duplicates, Shift+Up / Shift+Down select several rows; filter arrows in the column titles;
+;       Find (Ctrl+F, F3) on the Steps, List and Values sheets; hand-made loop / If blocks shown as shaded band rows.
 ; VisualMacroBlocks-makecode-telek-V31
 ; V31 = V30 + rules as columns instead of programming blocks: "Only when" (if / otherwise), "If it fails" (stop / skip / try 3 times),
 ;       Skip this row / Stop the run / Wait until window steps, an "Add step" menu, a plain Blocks toolbox, and a stop after 3 bad rows in a row.
@@ -387,7 +391,7 @@ VMB_Main() {
 VMB_BuildGui() {
     s := VMB()
     s.Easy := Integer(IniRead(s.Ini, "V17", "EasyMode", 1)) ? 1 : 0
-    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V31")
+    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V32")
     g.SetFont("s9", "Segoe UI")
     c := s.Ctl, lbl := s.Lbl
     c["Record"] := g.AddButton("xm ym w105 h30", "&Record")
@@ -3513,7 +3517,7 @@ VMB_UpdateTitle() {
     if s.Path != ""
         SplitPath(s.Path, &name)
     savedTag := s.Dirty ? " *" : (s.LastSavedAt != "" ? " (saved " . s.LastSavedAt . ")" : "")
-    s.Gui.Title := "Visual Macro Blocks V31" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
+    s.Gui.Title := "Visual Macro Blocks V32" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
     V7_SyncIdleHud()
 }
 
@@ -12896,7 +12900,10 @@ V17_EasyDesc(kind, fallback) {
 ; @summary Easy-mode "?" help: the three-step flow in plain words.
 ; @tags macro, gui, help, easy, v17
 V17_EasyHelp(*) {
-    MsgBox("RULES - THE EXCEL WAY"
+    MsgBox("ROWS - THE EXCEL WAY"
+        . "`nClick a row: Alt+Up / Alt+Down move it, Shift+Delete deletes it, Ctrl+Shift+D duplicates it, Ctrl+Shift+plus adds a Type step below."
+        . " Shift+Up / Shift+Down pick several rows. Click the arrow in a column title to pick which values to show. Ctrl+F finds text. Ctrl+Z undoes."
+        . "`n`nRULES - THE EXCEL WAY"
         . "`nOnly when: type a rule such as  Status = On  to do a step only for some rows. Type  otherwise  on the next step for the"
         . " other rows. If it fails: choose what happens when a step cannot be done. Values: names you can type as =name (the Values tab: a fixed text,"
         . " ask at start, today's date, or a number that counts up); the Remember step keeps the clipboard or a text under a name."
@@ -22722,7 +22729,15 @@ V4_ExportPlayer(*) {
         MsgBox(err.Message, "V10 export failed", "Iconx")
 }
 V4_Help(*) {
-    MsgBox("NEW IN V31.1 (Values): the Values tab (next to Steps and List) holds names you can use as =name in a Type step or in an Only when rule."
+    MsgBox("NEW IN V32 (rows like Excel):"
+        . "`n• Click a row, then Alt+Up / Alt+Down moves it, Shift+Delete deletes it (asked once), Ctrl+Shift+plus adds a Type step below, Ctrl+Shift+D duplicates it."
+        . " Shift+Up / Shift+Down (or Shift+click) pick several rows; the keys then work on all of them. Right-click a row for the same things. Ctrl+Z undoes each one."
+        . " Rows only move in step order: with a sort or filter on, press Step order / Clear first."
+        . "`n• Click the small arrow at the right of a column title to tick the values to show (Excel's filter arrow). Several columns work together. Clear removes them all."
+        . "`n• Ctrl+F finds text in the Steps, List or Values sheet: Enter / F3 next, Shift+F3 previous, Esc closes. It moves the cell cursor and never hides rows."
+        . "`n• A loop or If block made in List view shows as a shaded band row, its steps indented under it."
+        . "`n`n"
+        . "NEW IN V31.1 (Values): the Values tab (next to Steps and List) holds names you can use as =name in a Type step or in an Only when rule."
         . " When = fixed / ask at start (one small form before step 1; Cancel stops the run) / today's date (Value = the format, MM/dd/yyyy) / counts up (starts at Value, +1 each round)."
         . " Right-click a row -> Add step -> Remember clipboard as...: Remember clipboard as total, or Remember " . Chr(34) . "text" . Chr(34) . " as total."
         . "`n`nNEW IN V31 (rules as columns):"
