@@ -17755,6 +17755,7 @@ V29_Build(g) {
     OnMessage(0x20A, V29_OnWmWheel)                            ; WM_MOUSEWHEEL: Ctrl + wheel over the grid zooms it
     s.GridLV.OnNotify(-12, V29_OnCustomDraw)                   ; NM_CUSTOMDRAW: the cell cursor
     V33_LoadIni()                                              ; V33: [V33] ExcelLook
+    OnMessage(0x4E, V33_OnWmNotify)                            ; V33: the Excel-grey column headings
     s.GridLV.OnEvent("LoseFocus", (*) => V29_SaveCols())       ; widths / order are saved when the grid is left
     g.OnEvent("ContextMenu", V29_OnGuiMenu)                    ; right-click on the column heading: hide / show columns
     V29_ZoomLabel()
@@ -17976,7 +17977,7 @@ V29_OnCustomDraw(ctl, lParam) {
         isCur := row = s.CurCell
         if isCur && sub = s.GridCol - 1
             ret |= 0x10                                          ; CDRF_NOTIFYPOSTPAINT for the current column
-        if look.On {                                             ; V33: the colours of the cell before this one would stay: start from plain white / black every time
+        if look.On || (rows && !isCur) {                         ; V33: the colours of the cell before this one would stay: start from plain white / black every time
             NumPut("UInt", 0xFFFFFF, lParam, 84)
             NumPut("UInt", 0, lParam, 80)
             ret |= 0x2
@@ -23898,6 +23899,65 @@ V33_StyleTabs() {
     for name, sheet in Map("Steps", "steps", "List", "list", "Values", "values")
         if s.SheetTabs.Has(name)
             try s.SheetTabs[name].SetFont(s.Sheet = sheet ? "bold" : "norm")
+}
+
+; @summary WM_NOTIFY monitor: the column headings of the Steps / List / Values grids are painted light grey with a thin bottom line
+;          (header NM_CUSTOMDRAW, which the list forwards to its window). Only with the Excel look. Returns nothing for any other
+;          notification, so everything else is handled as before.
+; @tags look, header, gui, v33
+V33_OnWmNotify(wParam, lParam, msg, hwnd) {
+    static hdrs := 0
+    if NumGet(lParam, 2 * A_PtrSize, "Int") != -12
+        return
+    s := VMB()
+    if !s.ExcelLook || !s.GridLV
+        return
+    if !IsObject(hdrs) {
+        hdrs := Map()
+        for lv in [s.GridLV, s.ListLV, s.ValLV]
+            if lv
+                try hdrs[SendMessage(0x101F, 0, 0, lv)] := lv                  ; LVM_GETHEADER
+    }
+    from := NumGet(lParam, 0, "Ptr")
+    if !hdrs.Has(from)
+        return
+    stage := NumGet(lParam, 24, "UInt")
+    if stage = 1
+        return 0x20                                                            ; CDRF_NOTIFYITEMDRAW
+    if stage != 0x10001
+        return
+    look := IsObject(s.V33C) ? s.V33C : V33_LookBgr()
+    hdc := NumGet(lParam, 32, "Ptr")
+    L := NumGet(lParam, 40, "Int"), T := NumGet(lParam, 44, "Int"), R := NumGet(lParam, 48, "Int"), B := NumGet(lParam, 52, "Int")
+    idx := NumGet(lParam, 56, "Ptr")
+    rc := Buffer(16, 0)
+    NumPut("Int", L, "Int", T, "Int", R, "Int", B, rc)
+    brush := DllCall("CreateSolidBrush", "UInt", look.HeadBg, "Ptr")
+    DllCall("FillRect", "Ptr", hdc, "Ptr", rc, "Ptr", brush)
+    DllCall("DeleteObject", "Ptr", brush)
+    line := DllCall("CreateSolidBrush", "UInt", look.HeadLine, "Ptr")
+    NumPut("Int", L, "Int", B - 1, "Int", R, "Int", B, rc)
+    DllCall("FillRect", "Ptr", hdc, "Ptr", rc, "Ptr", line)                    ; the thin bottom line
+    sep := DllCall("CreateSolidBrush", "UInt", 0xD9D9D9, "Ptr")
+    NumPut("Int", R - 1, "Int", T + 2, "Int", R, "Int", B - 2, rc)
+    DllCall("FillRect", "Ptr", hdc, "Ptr", rc, "Ptr", sep)                     ; a faint divider between two headings
+    DllCall("DeleteObject", "Ptr", line)
+    DllCall("DeleteObject", "Ptr", sep)
+    buf := Buffer(1024, 0)
+    hdi := Buffer(72, 0)
+    NumPut("UInt", 0x2, hdi, 0)                                                ; HDI_TEXT
+    NumPut("Ptr", buf.Ptr, hdi, 8)
+    NumPut("Int", 500, hdi, 24)
+    SendMessage(0x120B, idx, hdi.Ptr, from)                                    ; HDM_GETITEMW
+    font := SendMessage(0x31, 0, 0, from)                                      ; WM_GETFONT
+    old := font ? DllCall("SelectObject", "Ptr", hdc, "Ptr", font, "Ptr") : 0
+    DllCall("SetBkMode", "Ptr", hdc, "Int", 1)
+    DllCall("SetTextColor", "Ptr", hdc, "UInt", look.HeadText)
+    NumPut("Int", L + 6, "Int", T, "Int", R - 4, "Int", B - 1, rc)
+    DllCall("DrawTextW", "Ptr", hdc, "Ptr", buf.Ptr, "Int", -1, "Ptr", rc, "UInt", 0x8824)     ; left, vcentre, one line, ellipsis, no & underline
+    if old
+        DllCall("SelectObject", "Ptr", hdc, "Ptr", old)
+    return 0x4                                                                 ; CDRF_SKIPDEFAULT
 }
 
 ; ==== V33 END (new V33 functions are added above this line)
