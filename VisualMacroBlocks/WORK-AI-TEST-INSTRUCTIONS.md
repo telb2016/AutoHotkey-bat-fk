@@ -4,6 +4,19 @@ You are testing a program on a real Windows PC because the people who built it o
 run the checks below, write down exactly what happened, and hand back one results file. You are a tester, not a
 developer: **do not change the script.** If something fails, record it and go on.
 
+## Where you may write files (the first version of this document got this wrong - follow it exactly)
+- EVERYTHING you create goes into ONE local folder: `C:\Temp\vmb\` (create it). That means the script copy, the
+  self-test report, test macros, your results file, screenshots, notes, and any helper script you write.
+- NEVER write to any other drive or folder: no network or mapped drives (Q:, H:, S: ...), no home drive, no shared
+  folders, no OneDrive / Documents, no Desktop, not your own working directory if it is anywhere else.
+  If `C:\Temp\vmb\` cannot be created or written, STOP and tell the owner. Do not pick another place.
+- NEVER let a Save / Save As / Export dialog save anything, in Notepad or in the program, except when a step below
+  tells you to save a test macro - and then type the FULL path starting with `C:\Temp\vmb\` yourself; never accept
+  the folder the dialog opens in (it is often a network home drive).
+- When Notepad asks "Do you want to save changes?" answer **Don't Save**.
+- Do not push or upload anything anywhere. Hand the results file to the owner.
+- LAST STEP of the whole test: list every file you created, with its full path, in the results file.
+
 ## Safety rules (read first - this is a work computer)
 1. Test ONLY against **Notepad** and the small test windows the program opens itself. Never record, click or type in
    Citrix, Edge, an electronic health record, email, or anything holding patient or work data.
@@ -64,10 +77,11 @@ Do this slowly, like a person would.
    line as when recording) and the status bar text.
 
 ## Part 4 - what the grid knows about a click
-1. **New**, **Record**. In Notepad: click the **File** menu, click **Save As...**, in the Save dialog click **Cancel**,
-   click Notepad's **Maximize** button, click it again to restore. Stop.
-2. Report the **On what** cell and the **Window** cell of each Click row. Expected along the lines of: menu "File",
-   menu item "Save As...", the "Cancel" button, Maximize button. Write exactly what you see, including `–`.
+1. **New**, **Record**. In Notepad: click the **Edit** menu, click **Go To...** (classic Notepad; in the Windows 11
+   Notepad use **Edit > Find**), in the small box that opens click **Cancel** (or its X), click Notepad's **Maximize**
+   button, click it again to restore. Stop. Do NOT open any Save, Save As, Open or Print dialog in this part.
+2. Report the **On what** cell and the **Window** cell of each Click row. Expected along the lines of: menu "Edit",
+   menu item "Go To...", the "Cancel" button, Maximize button. Write exactly what you see, including `–`.
 
 ## Part 5 - the grid as a spreadsheet (use the Part 2 macro: Open `notepad-test`)
 For each line write PASS or FAIL and one sentence on what happened.
@@ -89,7 +103,7 @@ For each line write PASS or FAIL and one sentence on what happened.
 13. Right-click a column header - a list of columns to show / hide appears (just close it).
 14. Scroll the grid sideways with the bottom scroll bar - the # and Action columns stay visible on the left.
 15. Click **List** (the old tree view), then **Grid** - both show the same steps.
-16. Close and restart the program - zoom, column widths and the macro are as you left them.
+16. Close and restart the program (same command with `--data`) - zoom, column widths and the macro are as you left them.
 
 ## Part 6 - repeat for a list (no loop blocks)
 1. **New**. Record in Notepad: click in the text area, type `Smith`, press Tab, type `250`, press Enter. Stop.
@@ -116,5 +130,5 @@ Write `C:\Users\VHACLETelekB\Downloads\vmb-test\PC-TEST-RESULTS.md` with: date, 
 scaling (Settings > Display), which Notepad (classic or Windows 11 tabbed), then one section per Part with the reports
 asked for above. Quote program messages word for word. Add screenshots of anything that looks wrong (grid drawing,
 overlapping controls, empty boxes instead of symbols) - make sure a screenshot shows only Notepad and the program.
-Give the file to the owner; if you have write access to the repository, also put it in the `VisualMacroBlocks` folder
-on the same branch.
+Write it to `C:\Temp\vmb\PC-TEST-RESULTS.md` (screenshots in the same folder) and tell the owner it is there.
+Do not put it anywhere else. End the file with the list of every file you created (full paths).

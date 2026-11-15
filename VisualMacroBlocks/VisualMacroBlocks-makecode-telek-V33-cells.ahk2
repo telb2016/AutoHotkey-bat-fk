@@ -25,7 +25,9 @@
 ; VisualMacroBlocks-makecode-telek-V26
 ; V26 = V25 + a "Check this PC" button (? button / right-click menu): one automatic check with one result window to copy.
 ; VisualMacroBlocks-makecode-telek-V25
-; V25 = V24 + a run history: every whole run is written to <macro>.runs.csv (right-click > Run history...), and a step that is often shaky gets a mark.
+; V33.2 = start with  --data "C:\folder"  to keep settings, drafts, history and logs in that folder instead of Documents.
+; V33.1 = the run history is kept in Documents\VisualMacros\history, never beside the macro file; the self-test report is never written beside the script.
+; V25 = V24 + a run history: every whole run is written to a .runs.csv file (right-click > Run history...), and a step that is often shaky gets a mark.
 ; VisualMacroBlocks-makecode-telek-V24
 ; V24 = V23 + a "Ready to play?" check before a run (program not open, screen changed) and a "?" after programs that are not running.
 ; VisualMacroBlocks-makecode-telek-V23
@@ -384,7 +386,7 @@ VMB() {
 VMB_Main() {
     s := VMB()
     OnExit(VMB_OnExit)
-    s.Dir := A_MyDocuments . "\VisualMacros"
+    s.Dir := V33_DataDir()          ; V33.2: Documents\VisualMacros, or the folder given with --data
     s.Ini := s.Dir . "\VisualMacroBlocksV10.ini"
     s.AutoSavePath := s.Dir . "\autosave-session-V18.vmacro.json"
     if !DirExist(s.Dir)
@@ -7535,7 +7537,7 @@ V4_WebDefs() {
         fields(["appear","Condition is exists (unchecked = absent)","check"]),
         "A real IF/ELSE container: drag desktop or web blocks into either branch.")
     add("web_screenshot","Save browser screenshot","Web - advanced",
-        Map("path",A_MyDocuments . "\VisualMacros\browser-V4.png","variable","","timeoutMs",10000),
+        Map("path",V33_DataDir() . "\browser-V4.png","variable","","timeoutMs",10000),
         [["path","PNG output path; supports {{variables}}","text"],result,timeout],
         "Saves the current viewport as PNG. Existing file at this explicit path is replaced.")
     add("web_eval","Evaluate JavaScript expression","Web - advanced",
@@ -12531,7 +12533,7 @@ V13_InspFocused(*) {
 
 ; @summary Local FDA NDC package list: a header line, then one dashed NDC per line.
 ; @tags ndc, pharmacy, barcode
-NDC_ListPath() => A_MyDocuments . "\VisualMacros\fda-ndc-packages.txt"
+NDC_ListPath() => V33_DataDir() . "\fda-ndc-packages.txt"
 
 ; @summary 10-digit NDC -> dashed FDA code(s) ("a|b" if more than one), loaded once from NDC_ListPath().
 ;          reload = read the file again; override = use this Map instead (self-test).
@@ -15373,7 +15375,19 @@ V25_TrimRuns(text, keep := 200) {
 
 ; @summary Where the run history of a macro file lives: the file name without its extension + ".runs.csv". "" for an unsaved macro.
 ; @tags macro, history, v25
-V25_RunsPath(macroPath) => macroPath = "" ? "" : RegExReplace(macroPath, "\.[^.\\/]*$") . ".runs.csv"
+V25_RunsPath(macroPath, dir := unset) {
+    ; V33.1: the history is NEVER written beside the macro (that may be a shared / network drive). It lives in
+    ; Documents\VisualMacros\history, named after the macro file plus a short code of its full path.
+    if macroPath = ""
+        return ""
+    if !IsSet(dir)
+        dir := VM_Config().HasOwnProp("HistoryDir") ? VM_Config().HistoryDir : V33_DataDir() . "\history"
+    name := RegExReplace(RegExReplace(macroPath, "^.*[\\/]"), "\.[^.]*$")
+    code := 0
+    Loop Parse, StrLower(macroPath)
+        code := Mod(code * 31 + Ord(A_LoopField), 0xFFFFFFF)
+    return dir . "\" . RegExReplace(name, "[^\w\-. ]", "_") . "-" . Format("{:07x}", code) . ".runs.csv"
+}
 
 ; @summary The runs saved for a macro file (empty array when there is no file or it cannot be read).
 ; @tags macro, history, v25
@@ -15395,6 +15409,7 @@ V25_RecordRun(macroPath, result, seconds, steps, noteSteps) {
     if path = ""
         return
     try {
+        DirCreate(RegExReplace(path, "\\[^\\]*$"))
         if !FileExist(path)
             FileAppend("When,Result,Seconds,Steps,Notes,NoteSteps`r`n", path, "UTF-8-RAW")
         FileAppend(V25_RunLine(result, seconds, steps, noteSteps) . "`r`n", path, "UTF-8-RAW")
@@ -24234,6 +24249,19 @@ V33_OnFreezeDraw(ctl, lParam) {
 ; ==== V33 END (new V33 functions are added above this line)
 
 
+; @summary Folder for everything the program keeps on its own (settings, autosave draft, run history, logs, downloads):
+;          Documents\VisualMacros, or - when the script is started with  --data "C:\some\folder"  - that folder.
+;          With --data nothing is written to Documents (which may be a redirected / synced / network folder).
+; @tags macro, files, v33
+V33_DataDir(args := unset) {
+    if !IsSet(args)
+        args := A_Args
+    for i, arg in args
+        if arg = "--data" && i < args.Length && Trim(args[i + 1]) != ""
+            return RTrim(args[i + 1], "\/")
+    return A_MyDocuments . "\VisualMacros"
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -24246,7 +24274,7 @@ V4_Start(*) {
     if A_Args.Length && A_Args[1] = "--qa"
         return
     if A_Args.Length && A_Args[1] = "--self-test" {
-        V4_SelfTest(A_Args.Length > 1 ? A_Args[2] : A_ScriptDir . "\V10-self-test.txt")
+        V4_SelfTest(A_Args.Length > 1 ? A_Args[2] : A_Temp . "\VMB-self-test.txt")      ; V33.1: never beside the script
         return
     }
     encoded := V4_Embedded()
@@ -25383,6 +25411,7 @@ V4_SelfTest(path) {
         vmbTestRoot := EnvGet("USERPROFILE") . "\Downloads\vmb-selftest"
         v25Dir := vmbTestRoot . "\v25test-" . A_TickCount
         DirCreate(v25Dir)
+        VM_Config().HistoryDir := v25Dir          ; the test's history goes to the temp folder, not Documents
         v25M := v25Dir . "\m.vmacro.json"
         V25_RecordRun(v25M, v25Ok, 1.5, 3, Map(2, "Step #2 n"))
         V25_RecordRun(v25M, {Ok: false, Index: 2, Message: "x", Failed: 1}, 2.5, 3, Map())
@@ -25422,7 +25451,8 @@ V4_SelfTest(path) {
         check("V25 marks: shaky mark comes last", V22_Marks(Map("type", "click", "note", "x"), "Step #1: y", true), V22_MarkChars()["note"] . V22_MarkChars()["warn"] . V22_MarkChars()["shaky"])
         check("V25 marks: not shaky adds nothing", V22_Marks(Map("type", "click")), "")
         check("V25 mark characters: symbol and plain", V22_MarkChars(0)["shaky"] . V22_MarkChars(1)["shaky"], "≈~")
-        DirDelete(v25Dir, true)
+        VM_Config().DeleteProp("HistoryDir")
+Thank you        DirDelete(v25Dir, true)
         ; V27 item A: cell data of the step grid
         v27S := Map("steady", 1, "verifyClicks", 1)
         v27Ctx := Map("Num", 7, "App", "notepad", "HasRun", true, "History", true, "Shaky", false, "Settings", v27S)
