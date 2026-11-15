@@ -293,7 +293,7 @@ VMB() {
         GridZoom: 100, GridColW: Map(), GridColApplied: Map(), GridHidden: Map(), GridOrderKeys: [], ColsSaved: "", CurCell: "",
         HasRun: false, History: false, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0,
         Sheet: "steps", PreviewRow: 1, RunBar: Map(), SheetTabs: Map(), ListBar: Map(), ListLV: 0, ListUndo: [], ListRedo: [], ListResult: Map(),
-        ListEditOn: false, ListEditRow: 0, ListEditLvRow: 0, ListEditCol: 3, ListEditOrig: "", ListCol: 3}
+        GridMark: Map(), ListEditOn: false, ListEditRow: 0, ListEditLvRow: 0, ListEditCol: 3, ListEditOrig: "", ListCol: 3}
     return s
 }
 
@@ -4880,6 +4880,7 @@ class V4Runner {
         this.UseTarget := ""                                    ; set by "Use Window From Here On"
         this.Warnings := []                                     ; V17: notes that did not stop the run (window size)
         this.RowLog := Map(), this.RowsSeen := 0                ; V30: list runs: row number -> why it was skipped; how many rows were started
+        this.WhenCache := Map(), this.WhenSkipped := 0         ; V31: chain info per list of steps; steps left out by an Only when rule
         this.BadStreak := 0, this.StopNote := ""                ; V31: bad rows in a row (list runs); why the runner stopped itself
     }
     Expand(value) {
@@ -4967,6 +4968,51 @@ class V4Runner {
         if this.Dbg
             V5_DbgNotify(this, node)
     }
+    ; V31: the chain info of a list of steps (cached), or "" when none of its steps has an Only when rule.
+    V31Infos(list) {
+        if this.WhenCache.Has(list)
+            return this.WhenCache[list]
+        has := false
+        for node in list
+            if node is Map && Trim(String(node.Get("when", ""))) != "" {
+                has := true
+                break
+            }
+        this.WhenCache[list] := has ? V31_Chains(list) : ""
+        return this.WhenCache[list]
+    }
+    ; V31: true when the step may run (no rule, or its rule / chain says yes). A rule that cannot be worked out stops the run.
+    V31Allowed(node, info, states) {
+        if info.Chain = 0 && info.Error = ""
+            return true
+        this.Index := this.Indices.Get(node, this.Index)
+        go := V31_Gate(info, states, (txt) => this.V31Eval(txt))
+        if !go
+            this.WhenSkipped += 1
+        return go
+    }
+    ; V31: tests a rule with the values the step would type: the current list row first, then runner variables; # = round / row number.
+    V31Eval(text) {
+        names := V31_RuleNames(this.Data.Headers, this.V31VarNames())
+        return V31_EvalText(text, names, (nm) => this.V31Value(nm), V31_WindowOpen)
+    }
+    V31VarNames() {
+        out := []
+        for k in this.Row
+            out.Push(k)
+        for k in this.Vars
+            out.Push(k)
+        return out
+    }
+    V31Value(name) {
+        if name = "#"
+            return this.LoopIndex
+        if this.Row.Has(name)
+            return this.Row[name]
+        if this.Vars.Has(name)
+            return this.Vars[name]
+        return this.Lookup(name)
+    }
     Run(list) {
         this.Depth += 1
         if this.Depth > 64 {
@@ -4974,11 +5020,15 @@ class V4Runner {
             throw Error("Maximum nested block/macro depth reached.")
         }
         try {
-            for node in list {
+            infos := this.V31Infos(list)                     ; V31: "" when no step of this list has an Only when rule (old macros)
+            states := Map()
+            for i, node in list {
                 if V4_RunState().Stop
                     return "stop"
                 if node.Get("disabled", 0)
                     continue
+                if infos is Array && !this.V31Allowed(node, infos[i], states)
+                    continue                                 ; V31: left out by its rule - not a failure, no note
                 this.Iterations += 1
                 if this.Iterations > 1000000
                     throw Error("Safety limit: more than 1,000,000 block executions.")
@@ -5017,8 +5067,49 @@ class V4Runner {
             this.Depth -= 1
         }
     }
+    ; V30 / V31: remembers why the current list row was skipped (the run macro has one extra For each block, so the step number is Index - 1).
+    RowFailLog(err) {
+        msg := err.Message
+        if msg = "" && err.HasProp("Extra")
+            msg := err.Extra
+        this.RowLog[this.RowNumber] := "step #" . (this.Index - 1) . ": " . (msg = "" ? "the step could not run" : Trim(StrReplace(StrReplace(msg, "`r", ""), "`n", " ")))
+    }
     OnFailure(node, err) {
         policy := this.Settings.Get("onFail", "ask")
+        choice := node.Get("onFailStep", "")                           ; V31: the step's own "If it fails" choice comes first (the step debugger keeps asking)
+        if choice != "" && !this.Dbg {
+            tries := 1
+            plan := V31_FailPlan(choice, policy, tries)
+            while plan = "retry" {
+                try this.Sleep(1000)
+                catch
+                    return "stop"
+                tries += 1
+                try {
+                    return this.Node(node)
+                } catch as again {
+                    if V4_RunState().Stop
+                        return "stop"
+                    err := again
+                }
+                plan := V31_FailPlan(choice, policy, tries)
+            }
+            switch plan {
+                case "stop":
+                    throw err
+                case "skip":
+                    this.Skipped += 1
+                    return ""
+                case "nextrow":
+                    if !this.RowNumber
+                        throw err                                      ; no row is running: nothing to skip to, so stop
+                    if this.Settings.Get("v30Row", 0)
+                        this.RowFailLog(err)
+                    return "nextrow"
+                case "ask":
+                    policy := "ask"
+            }
+        }
         if this.Settings.Get("v30Row", 0) && policy = "nextrow" {      ; V30: a list run (built in memory by V30_BuildRun): skip the bad row, go on
             if !this.RowNumber
                 throw err                                              ; a once-at-start step failed: nothing can run, so stop
@@ -5029,10 +5120,7 @@ class V4Runner {
                     return ""
                 }
             }
-            msg := err.Message                                          ; (the run macro has one extra For each block, so the step number is Index - 1)
-            if msg = "" && err.HasProp("Extra")
-                msg := err.Extra
-            this.RowLog[this.RowNumber] := "step #" . (this.Index - 1) . ": " . (msg = "" ? "the step could not run" : Trim(StrReplace(StrReplace(msg, "`r", ""), "`n", " ")))
+            this.RowFailLog(err)
             return "nextrow"
         }
         if policy = "coords" && RegExMatch(node["type"], "^(click|drag)$") && node.Get("find", "") != "spot" {
@@ -15625,6 +15713,8 @@ V27_Columns() {
         {Key: "anchor", Title: "Follows", Width: 150, Num: 0},
         {Key: "wait", Title: "Waits first", Width: 90, Num: 0},
         {Key: "repeats", Title: "Repeats", Width: 90, Num: 0},
+        {Key: "when", Title: "Only when", Width: 190, Num: 0},
+        {Key: "failstep", Title: "If it fails", Width: 150, Num: 0},
         {Key: "scroll", Title: "Scroll back", Width: 110, Num: 0},
         {Key: "check", Title: "Checks picture", Width: 90, Num: 0},
         {Key: "lastrun", Title: "Last run", Width: 160, Num: 0},
@@ -15667,6 +15757,8 @@ V27_Cells(node, ctx) {
         }
     }
     m["repeats"] := ctx.Get("Blocks", "") is Array ? V30_RepeatsText(ctx["Blocks"], node) : ""
+    m["when"] := V31_WhenCell(node, ctx.Get("Gate", ""), ctx.Get("Info", ""), ctx.Get("Settings", ""), ctx.Get("Preview", 1))
+    m["failstep"] := V31_FailText(node.Get("onFailStep", ""))
     m["button"] := mouse ? node.Get("button", "Left") : ""
     m["clicks"] := mouse ? String(Integer(node.Get("count", 1))) : ""
     m["held"] := mouse ? V27_HeldText(node.Get("mods", "")) : ""
@@ -15912,6 +16004,7 @@ V27_Rows(blocks, settings, state) {
     openExes := state.Get("Open", Map())
     V24_MarkApps(apps.App, openExes, items)
     rows := [], carry := Map()
+    v31Gates := V31_PreviewFor(blocks, settings, state.Get("Preview", 1)), v31Infos := V31_MacroInfos(blocks)
     for i, node in items {
         if VMF_IsContainer(node)
             continue
@@ -15922,9 +16015,11 @@ V27_Rows(blocks, settings, state) {
         ctx := Map("Num", i, "App", app, "Inside", V27_InsideText(chains[node]),
             "LastNote", state.Get("LastNotes", Map()).Get(i, ""), "HasRun", state.Get("HasRun", false),
             "Shaky", state.Get("Shaky", Map()).Has(i), "History", state.Get("History", false),
-            "Size", own != "" ? own : carry.Get(app, ""), "Settings", settings, "Preview", state.Get("Preview", 1), "Blocks", blocks)
+            "Size", own != "" ? own : carry.Get(app, ""), "Settings", settings, "Preview", state.Get("Preview", 1), "Blocks", blocks,
+            "Gate", v31Gates.Get(node, ""), "Info", v31Infos.Get(node, ""))
         row := V27_Cells(node, ctx)
         row.Node := node
+        row.Grey := v31Gates.Has(node) && v31Gates[node].Skip, row.Chain := v31Infos.Has(node) ? v31Infos[node].Chain : 0
         rows.Push(row)
     }
     return rows
@@ -16069,7 +16164,7 @@ V27_FillGrid(rows := "") {
         rows := V27_ViewRows()          ; sort / filter are only a view: the rows are the same, in another order or fewer
     }
     cols := V27_Columns()
-    s.GridRows := rows, s.GridNodes := Map(), s.GridRowOf := Map()
+    s.GridRows := rows, s.GridNodes := Map(), s.GridRowOf := Map(), s.GridMark := Map()
     s.GridSync := true
     lv.Opt("-Redraw")
     lv.Delete()
@@ -16080,10 +16175,12 @@ V27_FillGrid(rows := "") {
         n := lv.Add("", cells*)
         s.GridNodes[n] := r.Node
         s.GridRowOf[r.Node] := n
+        if (r.HasOwnProp("Grey") && r.Grey) || (r.HasOwnProp("Chain") && r.Chain)      ; V31: greyed (left out for the preview row) / chain colour bar
+            s.GridMark[n] := {Grey: r.HasOwnProp("Grey") && r.Grey, Chain: r.HasOwnProp("Chain") ? r.Chain : 0}
     }
     if rows.Length && !s.GridSized {
         s.GridSized := true
-        capped := Map("text", 1, "target", 1, "inside", 1, "note", 1, "lastrun", 1)
+        capped := Map("text", 1, "target", 1, "inside", 1, "note", 1, "lastrun", 1, "when", 1)
         for i, col in cols {
             if s.GridHidden.Has(col.Key)                        ; V29: a hidden column stays hidden
                 continue
@@ -16630,6 +16727,10 @@ V28_Editable(node, key) {
             return "text"
         case "repeats":
             return V30_IsTop(node) ? ["yes", "once at start"] : ""
+        case "when":
+            return V31_HasRuleCells(node) ? "text" : ""
+        case "failstep":
+            return V31_HasRuleCells(node) ? V31_FailChoices() : ""
         case "scroll":
             return node.Get("scroll", "") is Map ? "text" : ""
         case "winsize":
@@ -16733,6 +16834,10 @@ V28_EditText(node, key) {
             return V4_Bool(node.Get("disabled", 0)) ? "off" : "on"
         case "repeats":
             return V30_RepeatsText(V30_BlocksNow(), node)
+        case "when":
+            return Trim(String(node.Get("when", "")))
+        case "failstep":
+            return V31_FailText(node.Get("onFailStep", ""))
         case "note":
             return node.Get("note", "")
     }
@@ -16749,6 +16854,7 @@ V28_Hint(node, key) {
         case "winsize": return "Window size: 800 x 600, or maximized."
         case "note": return "Note: your own words. Empty removes it."
         case "repeats": return "Repeats: yes, or once at start (only the first steps can be once at start)."
+        case "when": return "Only when: a rule such as  Status = On  or  Amount > 100  or  Name is empty. otherwise = the other rows. Empty = always."
         case "text":
             t := node is Map ? node.Get("type", "") : ""
             if t = "keys"
@@ -16780,6 +16886,8 @@ V28_Plan(node, key, input) {
                 text := choice
                 break
             }
+        if key = "failstep" && text = ""
+            text := ed[1]
         found := false
         for choice in ed
             if choice = text
@@ -16796,6 +16904,9 @@ V28_Plan(node, key, input) {
             case "repeats":
                 so := V30_SetOnce(V30_BlocksNow(), node, text)
                 return so.Ok ? yes([set(["once"], so.Value)]) : no(so.Error)
+            case "failstep":
+                fc := V31_FailCode(text)
+                return yes([fc.Code = "" ? del(["onFailStep"]) : set(["onFailStep"], fc.Code)])
         }
     }
     switch key {
@@ -16848,6 +16959,11 @@ V28_Plan(node, key, input) {
             return yes([set(["width"], Integer(m[1])), set(["height"], Integer(m[2])), set(["maximize"], 0)])
         case "note":
             return yes([text = "" ? del(["note"]) : set(["note"], text)])
+        case "when":
+            bad := V31_CheckWhen(V31_SiblingsOf(V30_BlocksNow(), node), node, text, V31_NamesNow())
+            if bad != ""
+                return no(bad)
+            return yes([text = "" || StrLower(text) = "always" ? del(["when"]) : set(["when"], RegExReplace(text, "\s+", " "))])
     }
     return no(V28_NotEditableText())
 }
@@ -17274,9 +17390,9 @@ V28_DeleteCell() {
     if !IsObject(node)
         return
     col := V27_Columns()[s.GridCol]
-    if col.Key != "note" && col.Key != "wait"
-        return VMB_Status("Delete clears only a Note or a Waits first cell. To delete the step, use the Delete button or the right-click menu.")
-    if !node.Has(col.Key = "note" ? "note" : "delayMs")
+    if !V31_Clearable(col.Key)
+        return VMB_Status("Delete clears only a Note, Waits first, Only when or If it fails cell. To delete the step, use the Delete button or the right-click menu.")
+    if !node.Has(V31_ClearKey(col.Key))
         return VMB_Status(col.Title . " is already empty.")
     V28_Do(node, V28_Plan(node, col.Key, ""), col.Title . " cleared. Ctrl+Z undoes it.")
 }
@@ -17603,22 +17719,69 @@ V29_OnCustomDraw(ctl, lParam) {
     stage := NumGet(lParam, 24, "UInt")                          ; NMCUSTOMDRAW.dwDrawStage
     if stage = 1 {                                               ; CDDS_PREPAINT
         s.CurCell := s.View = "grid" ? s.GridLV.GetNext(0) : 0
-        return s.CurCell ? 0x20 : 0                              ; CDRF_NOTIFYITEMDRAW
+        return s.CurCell || s.GridMark.Count ? 0x20 : 0          ; CDRF_NOTIFYITEMDRAW
     }
     row := NumGet(lParam, 56, "Ptr") + 1                         ; dwItemSpec = item index
+    mark := s.GridMark.Get(row, 0)                               ; V31: a row left out for the preview row (grey) or in an if / otherwise chain (colour bar)
     if stage = 0x10001                                           ; CDDS_ITEMPREPAINT
-        return row = s.CurCell ? 0x20 : 0                        ; CDRF_NOTIFYSUBITEMDRAW: only for the selected row
-    if row != s.CurCell
+        return row = s.CurCell || mark ? 0x20 : 0                ; CDRF_NOTIFYSUBITEMDRAW: only for the selected / marked rows
+    if row != s.CurCell && !mark
         return 0
     sub := NumGet(lParam, 88, "Int")                             ; NMLVCUSTOMDRAW.iSubItem
-    if stage = 0x30001                                           ; CDDS_ITEMPREPAINT | CDDS_SUBITEM
-        return sub = s.GridCol - 1 ? 0x10 : 0                    ; CDRF_NOTIFYPOSTPAINT for the current column only
+    if stage = 0x30001 {                                         ; CDDS_ITEMPREPAINT | CDDS_SUBITEM
+        ret := 0
+        if row = s.CurCell && sub = s.GridCol - 1
+            ret |= 0x10                                          ; CDRF_NOTIFYPOSTPAINT for the current column
+        if mark {
+            if mark.Grey && row != s.CurCell {
+                NumPut("UInt", 0x909090, lParam, 80)             ; clrText: grey
+                ret |= 0x2                                       ; CDRF_NEWFONT
+            }
+            if mark.Chain && sub = V31_WhenSub()
+                ret |= 0x10
+        }
+        return ret
+    }
     if stage = 0x30002 {                                         ; CDDS_ITEMPOSTPAINT | CDDS_SUBITEM
-        p := V29_CursorRect(row, sub + 1)
-        if IsObject(p)
-            V29_DrawFrame(NumGet(lParam, 32, "Ptr"), p)
+        if mark && mark.Chain && sub = V31_WhenSub() {
+            p := V29_CursorRect(row, sub + 1)
+            if IsObject(p)
+                V31_DrawBar(NumGet(lParam, 32, "Ptr"), p, V31_ChainColor(mark.Chain))
+        }
+        if row = s.CurCell && sub = s.GridCol - 1 {
+            p := V29_CursorRect(row, sub + 1)
+            if IsObject(p)
+                V29_DrawFrame(NumGet(lParam, 32, "Ptr"), p)
+        }
     }
     return 0
+}
+
+; @summary The sub-item number (0-based) of the Only when column.
+; @tags grid, v31
+V31_WhenSub() {
+    for i, col in V27_Columns()
+        if col.Key = "when"
+            return i - 1
+    return -1
+}
+
+; @summary The colour (COLORREF 0xBBGGRR) of a chain's bar: the same chain id always gives the same colour; six strong colours in turn.
+; @returns Integer
+; @tags grid, chains, v31
+V31_ChainColor(chain) {
+    static pal := [0xC07020, 0x3C9A2E, 0x2060E0, 0xB03CA0, 0x1AA0D8, 0x808000]
+    return pal[Mod(Max(1, chain) - 1, pal.Length) + 1]
+}
+
+; @summary Paints the chain's colour bar: a 6 px wide strip at the left edge of the cell rectangle.
+; @tags grid, chains, v31
+V31_DrawBar(hdc, p, color) {
+    rc := Buffer(16, 0)
+    NumPut("Int", p.L, "Int", p.T + 1, "Int", p.L + 6, "Int", p.B - 1, rc)
+    brush := DllCall("CreateSolidBrush", "UInt", color, "Ptr")
+    DllCall("FillRect", "Ptr", hdc, "Ptr", rc, "Ptr", brush)
+    DllCall("DeleteObject", "Ptr", brush)
 }
 
 ; @summary Moves the cell cursor to a column (and scrolls it into view); the status bar and name box say where it is.
@@ -17744,9 +17907,9 @@ V29_CutCell() {
     cur := V29_Current()
     if !cur
         return
-    if cur.Key != "note" && cur.Key != "wait"
-        return VMB_Status("Cut works only on a Note or a Waits first cell (the cells Delete can clear). Ctrl+C copies this one.")
-    if !cur.Node.Has(cur.Key = "note" ? "note" : "delayMs")
+    if !V31_Clearable(cur.Key)
+        return VMB_Status("Cut works only on a Note, Waits first, Only when or If it fails cell (the cells Delete can clear). Ctrl+C copies this one.")
+    if !cur.Node.Has(V31_ClearKey(cur.Key))
         return VMB_Status(cur.Title . " is already empty, nothing to cut.")
     A_Clipboard := V29_CopyText(cur.Node, cur.Key, "")
     V28_DeleteCell()
@@ -19593,6 +19756,627 @@ V31_StreakSummary(total, seen, skipped) {
 ; @tags macro, gui, colors, v31
 V31_PalColors(plain, colors) => plain ? 0 : colors
 
+; ----------------------------------------------------------------------------
+; V31 item A / B: "Only when" rules and "otherwise" chains (pure parts first, then the window parts)
+; ----------------------------------------------------------------------------
+
+; @summary The names a rule may use: # (the round / row number), the list columns, the given Values / variable names, and the
+;          built-in ones (clipboard, date, time, row, index). No duplicates (case does not matter).
+; @returns Array of names
+; @tags rules, v31
+V31_RuleNames(headers, extra := "") {
+    out := [], seen := Map(), seen.CaseSense := false
+    add(n) {
+        n := Trim(String(n))
+        if n != "" && !seen.Has(n) {
+            seen[n] := 1
+            out.Push(n)
+        }
+    }
+    add("#")
+    if headers is Array
+        for h in headers
+            add(h)
+    if extra is Array
+        for h in extra
+            add(h)
+    for h in ["clipboard", "date", "time", "row", "index"]
+        add(h)
+    return out
+}
+
+; @summary Splits the word "otherwise" off the front of an Only when text. "otherwise" alone = else; "otherwise, Amount > 50" or
+;          "otherwise Amount > 50" = else-if. Returns {Other, Rest} (Rest = the rule text that is left, "" for a plain else).
+; @returns {Other, Rest}
+; @tags rules, chains, v31
+V31_SplitOtherwise(text) {
+    t := Trim(String(text))
+    if !RegExMatch(t, "i)^otherwise(?![\w])[\s,:;-]*(.*)$", &m)
+        return {Other: false, Rest: t}
+    return {Other: true, Rest: Trim(m[1])}
+}
+
+; @summary The rule text in one comparable form (lower case, one space between words) - two steps with the same form are one branch.
+; @tags rules, chains, v31
+V31_Norm(text) => StrLower(RegExReplace(Trim(String(text)), "\s+", " "))
+
+; @summary Takes one pair of matching quotes off a value ("Save As" or 'Save As').
+; @tags rules, v31
+V31_Unquote(text) {
+    t := Trim(String(text))
+    if StrLen(t) >= 2 {
+        q := SubStr(t, 1, 1)
+        if (q = Chr(34) || q = "'") && SubStr(t, -1) = q
+            return SubStr(t, 2, StrLen(t) - 2)
+    }
+    return t
+}
+
+; @summary True when the text is a number (also 1,250 and 3.5); V31_ToNum gives its value.
+; @tags rules, v31
+V31_IsNum(text) {
+    t := Trim(String(text))
+    if RegExMatch(t, "^[-+]?\d{1,3}(,\d{3})+(\.\d+)?$")
+        t := StrReplace(t, ",")
+    return t != "" && IsNumber(t)
+}
+
+; @summary The value of a number text (see V31_IsNum).
+; @tags rules, v31
+V31_ToNum(text) {
+    t := Trim(String(text))
+    if RegExMatch(t, "^[-+]?\d{1,3}(,\d{3})+(\.\d+)?$")
+        t := StrReplace(t, ",")
+    return Number(t)
+}
+
+; @summary Splits a rule at " and " / " or " (outside quotes). One level only: mixing and + or is an error sentence.
+;          Returns {Ok, Error, Join ("", "and" or "or"), Parts (Array of text)}.
+; @returns {Ok, Error, Join, Parts}
+; @tags rules, v31
+V31_SplitParts(text) {
+    parts := [], join := "", cur := "", quote := "", i := 1, n := StrLen(text)
+    while i <= n {
+        c := SubStr(text, i, 1)
+        if quote != "" {
+            cur .= c
+            if c = quote && (i = n || RegExMatch(SubStr(text, i + 1, 1), "\s"))
+                quote := ""
+            i += 1
+            continue
+        }
+        if (c = Chr(34) || c = "'") && (i = 1 || RegExMatch(SubStr(text, i - 1, 1), "[\s=<>!]")) {
+            quote := c
+            cur .= c
+            i += 1
+            continue
+        }
+        if RegExMatch(SubStr(text, i), "i)^\s+(and|or)(?:\s+|$)", &m) {
+            word := StrLower(m[1])
+            if join != "" && join != word
+                return {Ok: false, Error: "Use only  and  or only  or  in one rule (no mixing). Put the other idea on its own step.", Join: "", Parts: []}
+            join := word
+            parts.Push(cur), cur := ""
+            i += StrLen(m[0])
+            continue
+        }
+        cur .= c
+        i += 1
+    }
+    parts.Push(cur)
+    return {Ok: true, Error: "", Join: join, Parts: parts}
+}
+
+; @summary Reads one comparison ("Status = On", "Name is empty", "window Save As is open") against the known names.
+;          Returns {Ok, Error, Part} (Part = Map with kind "cmp" (name, op, value) or "win" (title, open)).
+; @returns {Ok, Error, Part}
+; @tags rules, v31
+V31_ParsePart(text, names) {
+    no(msg) => {Ok: false, Error: msg, Part: ""}
+    t := Trim(text)
+    if t = ""
+        return no("There is a rule missing here. Write something like  Status = On  or  Amount > 100.")
+    best := ""
+    for nm in names {
+        L := StrLen(nm)
+        if L > StrLen(best) && StrLower(SubStr(t, 1, L)) = StrLower(nm) {
+            nxt := SubStr(t, L + 1, 1)
+            if nxt = "" || RegExMatch(nxt, "[\s=<>!]")
+                best := nm
+        }
+    }
+    if best = "" {
+        if RegExMatch(t, "i)^window\s+(.+?)\s+is\s+(not\s+open|open|closed)$", &w) {
+            title := V31_Unquote(w[1])
+            if title = ""
+                return no("Write the window title after the word window, for example  window Save As is open.")
+            return {Ok: true, Error: "", Part: Map("kind", "win", "title", title, "open", StrLower(w[2]) = "open")}
+        }
+        word := RegExMatch(t, "^[^\s=<>!]+", &f) ? f[0] : t
+        shown := ""
+        for k, nm in names {
+            if k > 10 {
+                shown .= ", ..."
+                break
+            }
+            shown .= (shown = "" ? "" : ", ") . nm
+        }
+        return no(Chr(34) . word . Chr(34) . " is not a name I know. Names you can use: " . shown . ".")
+    }
+    rest := SubStr(t, StrLen(best) + 1)
+    op := "", raw := ""
+    if RegExMatch(rest, "i)^\s*(is\s+not\s+empty|is\s+empty)\s*$", &m)
+        op := InStr(StrLower(m[1]), "not") ? "notempty" : "empty"
+    else if RegExMatch(rest, "i)^\s+(is\s+not|isn't|is|does\s+not\s+contain|not\s+contains|contains)\s+(.+)$", &m) {
+        word := RegExReplace(StrLower(m[1]), "\s+", " ")
+        op := word = "is" ? "=" : (word = "is not" || word = "isn't") ? "!=" : word = "contains" ? "contains" : "notcontains"
+        raw := Trim(m[2])
+    } else if RegExMatch(rest, "^\s*(>=|<=|<>|!=|==|=|>|<)\s*(.*)$", &m) {
+        op := m[1] = "<>" ? "!=" : m[1] = "==" ? "=" : m[1]
+        raw := Trim(m[2])
+        if raw = ""
+            return no("Write what to compare with after " . m[1] . ", for example  " . best . " " . m[1] . " 100.")
+    } else
+        return no("After " . best . " write  =  >  <  >=  <=  is not  contains  is empty  or  is not empty, then the value.")
+    return {Ok: true, Error: "", Part: Map("kind", "cmp", "name", best, "op", op, "value", V31_Unquote(raw))}
+}
+
+; @summary Reads an Only when rule (without a leading "otherwise") against the known names. Returns {Ok, Error, Rule}; Rule = Map with
+;          join ("", "and", "or") and parts (see V31_ParsePart). The error is a plain sentence.
+; @returns {Ok, Error, Rule}
+; @tags rules, v31
+V31_ParseRule(text, names) {
+    sp := V31_SplitParts(Trim(String(text)))
+    if !sp.Ok
+        return {Ok: false, Error: sp.Error, Rule: ""}
+    parts := []
+    for chunk in sp.Parts {
+        p := V31_ParsePart(chunk, names)
+        if !p.Ok
+            return {Ok: false, Error: p.Error, Rule: ""}
+        parts.Push(p.Part)
+    }
+    return {Ok: true, Error: "", Rule: Map("join", sp.Join, "parts", parts)}
+}
+
+; @summary Tests one comparison. lookupFn(name) gives the value text; winFn(title) says whether a window with that title is open.
+;          Text compares ignore case; two numbers compare as numbers; < > with an empty side are false.
+; @returns bool
+; @tags rules, v31
+V31_TestPart(part, lookupFn, winFn) {
+    if part["kind"] = "win" {
+        open := winFn(part["title"]) ? true : false
+        return part["open"] ? open : !open
+    }
+    l := Trim(String(lookupFn(part["name"]))), v := part["value"], op := part["op"]
+    switch op {
+        case "empty": return l = ""
+        case "notempty": return l != ""
+        case "contains": return InStr(l, v) > 0
+        case "notcontains": return InStr(l, v) = 0
+    }
+    both := V31_IsNum(l) && V31_IsNum(v)
+    if op = "=" || op = "!=" {
+        same := both ? V31_ToNum(l) = V31_ToNum(v) : StrLower(l) = StrLower(v)
+        return op = "=" ? same : !same
+    }
+    if !both && (l = "" || v = "")
+        return false
+    c := both ? (V31_ToNum(l) < V31_ToNum(v) ? -1 : V31_ToNum(l) > V31_ToNum(v) ? 1 : 0) : StrCompare(l, v, false)
+    switch op {
+        case ">": return c > 0
+        case ">=": return c >= 0
+        case "<": return c < 0
+        case "<=": return c <= 0
+    }
+    return false
+}
+
+; @summary Tests a parsed rule (V31_ParseRule's Rule): all parts for "and", any part for "or", the one part otherwise.
+; @returns bool
+; @tags rules, v31
+V31_Test(rule, lookupFn, winFn) {
+    isOr := rule["join"] = "or"
+    for p in rule["parts"] {
+        r := V31_TestPart(p, lookupFn, winFn)
+        if isOr && r
+            return true
+        if !isOr && !r
+            return false
+    }
+    return !isOr
+}
+
+; @summary Parses and tests a rule text in one go; a rule that cannot be read throws its plain sentence.
+; @tags rules, v31
+V31_EvalText(text, names, lookupFn, winFn) {
+    r := V31_ParseRule(text, names)
+    if !r.Ok
+        throw Error(r.Error)
+    return V31_Test(r.Rule, lookupFn, winFn)
+}
+
+; @summary For each step of one list of steps (siblings): its place in an if / otherwise chain. Returns an Array (same order) of
+;          {Chain (id, 0 = none), Branch, Kind ("if", "elseif", "else" or ""), First (first step of its branch), Rule (the rule text
+;          without "otherwise"), Error ("" or a plain sentence)}. A step without a rule ends the chain; a switched-off step is skipped
+;          over; steps with the same rule text in a row are one branch; ids start after base.
+; @returns Array of {Chain, Branch, Kind, First, Rule, Error}
+; @tags rules, chains, v31
+V31_Chains(steps, base := 0) {
+    out := []
+    chain := base, branch := 0, open := false, closed := false, prev := "", lastKind := ""
+    for node in steps {
+        info := {Chain: 0, Branch: 0, Kind: "", First: false, Rule: "", Error: ""}
+        out.Push(info)
+        if !(node is Map) || V4_Bool(node.Get("disabled", 0))
+            continue
+        w := Trim(String(node.Get("when", "")))
+        if w = "" || StrLower(w) = "always" {
+            open := false, prev := ""
+            continue
+        }
+        sp := V31_SplitOtherwise(w), norm := V31_Norm(w)
+        info.Rule := sp.Rest
+        if sp.Other {
+            if !open {
+                info.Error := "otherwise needs a step with a rule right above it. Give the step above an Only when rule first."
+                continue
+            }
+            kind := sp.Rest = "" ? "else" : "elseif"
+            if norm = prev {
+                info.Chain := chain, info.Branch := branch, info.Kind := kind
+                continue
+            }
+            if closed {
+                info.Error := "The otherwise above already covers every other case, so this one could never run."
+                continue
+            }
+            branch += 1, prev := norm
+            info.Chain := chain, info.Branch := branch, info.Kind := kind, info.First := true
+            if kind = "else"
+                closed := true
+        } else {
+            if open && norm = prev {
+                info.Chain := chain, info.Branch := branch, info.Kind := lastKind
+                continue
+            }
+            chain += 1, branch := 1, open := true, closed := false, prev := norm
+            info.Chain := chain, info.Branch := 1, info.Kind := "if", info.First := true
+        }
+        lastKind := info.Kind
+    }
+    return out
+}
+
+; @summary The state of a chain before any step of it: nothing ran yet.
+; @tags rules, chains, v31
+V31_NewState() => {Taken: false, Run: false}
+
+; @summary True when the rule of this step must be looked at (the first step of an if, or of an otherwise-rule while no branch ran).
+; @tags rules, chains, v31
+V31_NeedsRule(state, info) => info.First && (info.Kind = "if" || (info.Kind = "elseif" && !state.Taken))
+
+; @summary The decision for a step. state = {Taken, Run} of its chain so far, info = the step's V31_Chains entry, ruleResult = the
+;          result of its rule (only used when V31_NeedsRule). Returns the new state; its Run says whether the step runs.
+;          Later steps of the same branch (First = false) follow the branch's decision.
+; @returns {Taken, Run}
+; @tags rules, chains, v31
+V31_Decide(state, info, ruleResult) {
+    if !info.First
+        return {Taken: state.Taken, Run: state.Run}
+    switch info.Kind {
+        case "if":
+            go := ruleResult ? true : false
+            return {Taken: go, Run: go}
+        case "elseif":
+            go := !state.Taken && ruleResult
+            return {Taken: state.Taken || go, Run: go}
+        case "else":
+            return {Taken: true, Run: !state.Taken}
+    }
+    return {Taken: state.Taken, Run: true}
+}
+
+; @summary The one place that decides whether a step runs, for the runner and the grid preview. info = V31_Chains entry, states =
+;          Map chain id -> state (one Map per run of a list of steps), evalFn(ruleText) -> bool (may throw). A step with no rule
+;          runs. A step whose "otherwise" has nothing above throws the entry's sentence.
+; @returns bool (true = run it)
+; @tags rules, chains, v31
+V31_Gate(info, states, evalFn) {
+    if info.Error != ""
+        throw Error(info.Error)
+    if info.Chain = 0
+        return true
+    st := states.Has(info.Chain) ? states[info.Chain] : V31_NewState()
+    res := false
+    if V31_NeedsRule(st, info)
+        res := evalFn(info.Rule)
+    nst := V31_Decide(st, info, res)
+    states[info.Chain] := nst
+    return nst.Run
+}
+
+; @summary Chain info for EVERY step of a macro (all nested lists too), as Map node -> V31_Chains entry. Chain ids are unique in the macro.
+; @returns Map
+; @tags rules, chains, v31
+V31_MacroInfos(blocks) {
+    out := Map(), base := {N: 0}
+    V31__Walk(blocks, out, base)
+    return out
+}
+
+; @summary Helper of V31_MacroInfos (walks one list, then the lists inside its blocks).
+; @tags rules, chains, v31
+V31__Walk(list, out, base) {
+    infos := V31_Chains(list, base.N)
+    for i, node in list {
+        if !(node is Map)
+            continue
+        out[node] := infos[i]
+        if infos[i].Chain > base.N
+            base.N := infos[i].Chain
+    }
+    for node in list
+        if node is Map && VMF_IsContainer(node)
+            for kid in VMF_Children(node)
+                V31__Walk(kid, out, base)
+}
+
+; @summary The names of the variables a macro sets (Set, For, Change, NDC blocks), for the rule parser.
+; @returns Array
+; @tags rules, v31
+V31_MacroVars(blocks) {
+    out := []
+    if !(blocks is Array)
+        return out
+    for node in VMF_Flatten(blocks)
+        if RegExMatch(node.Get("type", ""), "^(set|for|change|ndc)$") && node.Get("name", "") != ""
+            out.Push(node["name"])
+    return out
+}
+
+; @summary What a rule would do for each step of a macro, for one preview row: Map node -> {Skip (true = the step is left out),
+;          Err ("" or a sentence when the rule could not be worked out), Rule}. Only steps with a rule are in the Map.
+;          names = the names rules may use, lookupFn / winFn as in V31_Test.
+; @returns Map
+; @tags rules, preview, v31
+V31_PreviewDecisions(blocks, names, lookupFn, winFn) {
+    out := Map()
+    V31__Prev(blocks, names, lookupFn, winFn, out)
+    return out
+}
+
+; @summary Helper of V31_PreviewDecisions (one list, then the lists inside its blocks; every list has its own chain states).
+; @tags rules, preview, v31
+V31__Prev(list, names, lookupFn, winFn, out) {
+    infos := V31_Chains(list)
+    states := Map()
+    evalFn := (txt) => V31_EvalText(txt, names, lookupFn, winFn)
+    for i, node in list {
+        if !(node is Map) || V4_Bool(node.Get("disabled", 0))
+            continue
+        info := infos[i]
+        if info.Chain = 0 && info.Error = ""
+            continue
+        d := {Skip: false, Err: "", Rule: Trim(String(node.Get("when", "")))}
+        try d.Skip := !V31_Gate(info, states, evalFn)
+        catch as e
+            d.Err := e.Message
+        out[node] := d
+    }
+    for node in list
+        if node is Map && VMF_IsContainer(node)
+            for kid in VMF_Children(node)
+                V31__Prev(kid, names, lookupFn, winFn, out)
+}
+
+; @summary The value of a name for the preview row (list column of that row, # = the number, date / time / clipboard). A name with
+;          no value yet throws.
+; @tags rules, preview, v31
+V31_PreviewValue(name, headers, row, number) {
+    if name = "#" || StrLower(name) = "index" || StrLower(name) = "row"
+        return number
+    for i, h in headers
+        if StrLower(h) = StrLower(name)
+            return row is Array && i <= row.Length ? row[i] : ""
+    switch StrLower(name) {
+        case "date": return FormatTime(, "yyyy-MM-dd")
+        case "time": return FormatTime(, "HH:mm:ss")
+        case "clipboard": return A_Clipboard
+    }
+    throw Error(name . " has no value before the run starts.")
+}
+
+; @summary True when a window whose title contains the text is open now (any program; hidden windows do not count).
+; @tags rules, window, v31
+V31_WindowOpen(title) {
+    t := Trim(String(title))
+    if t = ""
+        return false
+    try return WinExist(t) != 0
+    return false
+}
+
+; @summary The preview of the macro's rules for one row (or round) number: Map node -> {Skip, Err, Rule}. Empty when the macro uses no
+;          list ideas (no List and Run is "once"), so old macros show nothing new.
+; @returns Map
+; @tags rules, preview, v31
+V31_PreviewFor(blocks, settings, number) {
+    if !(settings is Map) || !(blocks is Array)
+        return Map()
+    lst := V30_ListOf(settings), rm := String(settings.Get("runMode", "once"))
+    if !(lst is Map) && rm != "list" && rm != "times"
+        return Map()
+    headers := V30_Headers(settings), row := V30_PreviewRowCells(settings, number)
+    names := V31_RuleNames(headers, V31_MacroVars(blocks))
+    return V31_PreviewDecisions(blocks, names, (nm) => V31_PreviewValue(nm, headers, row, number), V31_WindowOpen)
+}
+
+; @summary The step list that holds a step (searches the macro's blocks and the lists inside blocks). [node] when it is not found.
+; @returns Array
+; @tags rules, v31
+V31_SiblingsOf(blocks, node) {
+    if !(blocks is Array)
+        return [node]
+    found := V31__Find(blocks, node)
+    return found is Array ? found : [node]
+}
+
+; @summary Helper of V31_SiblingsOf.
+; @tags rules, v31
+V31__Find(list, node) {
+    for x in list
+        if x = node
+            return list
+    for x in list
+        if x is Map && VMF_IsContainer(x)
+            for kid in VMF_Children(x) {
+                r := V31__Find(kid, node)
+                if r is Array
+                    return r
+            }
+    return ""
+}
+
+; @summary Checks an Only when text typed for a step: "" when it is fine, else a plain sentence. Empty / "always" are fine. An
+;          "otherwise" needs a step with a rule right above it (looked at with the new text in place). siblings = the step's list.
+; @returns String
+; @tags rules, chains, v31
+V31_CheckWhen(siblings, node, text, names) {
+    t := Trim(String(text))
+    if t = "" || StrLower(t) = "always"
+        return ""
+    sp := V31_SplitOtherwise(t)
+    if sp.Rest != "" {
+        r := V31_ParseRule(sp.Rest, names)
+        if !r.Ok
+            return r.Error
+    } else if !sp.Other
+        return ""
+    copy := node.Clone(), copy["when"] := t
+    list := []
+    for x in siblings
+        list.Push(x = node ? copy : x)
+    if !list.Length
+        list.Push(copy)
+    infos := V31_Chains(list)
+    for i, x in list
+        if x = copy
+            return infos[i].Error
+    return ""
+}
+
+; @summary Puts a rule together from the builder's three choices. op is one of V31_BuilderOps(); value is quoted when it needs to be.
+; @returns String
+; @tags rules, builder, v31
+V31_BuildRuleText(name, op, value) {
+    v := Trim(String(value))
+    if op = "window is open" || op = "window is not open"
+        return "window " . v . (op = "window is open" ? " is open" : " is not open")
+    if op = "is empty" || op = "is not empty"
+        return name . " " . op
+    if v != "" && (RegExMatch(v, "i)\s(and|or)\s") || RegExMatch(v, "^[`"']")) && !(SubStr(v, 1, 1) = Chr(34) && SubStr(v, -1) = Chr(34))
+        v := Chr(34) . v . Chr(34)
+    return name . " " . op . " " . v
+}
+
+; @summary The comparisons the rule builder offers, in order.
+; @tags rules, builder, v31
+V31_BuilderOps() => ["=", "is not", ">", ">=", "<", "<=", "contains", "does not contain", "is empty", "is not empty", "window is open", "window is not open"]
+
+; ----------------------------------------------------------------------------
+; V31 item C: "If it fails" (what happens when one step cannot be done)
+; ----------------------------------------------------------------------------
+
+; @summary The choices of the If it fails column, in the order shown. The first one (macro setting) means: do what the macro's
+;          own On failure setting says (nothing new).
+; @returns Array of text
+; @tags fail, v31
+V31_FailChoices() => ["macro setting", "ask me", "stop", "skip this step", "skip this row", "try 3 times, then stop", "try 3 times, then skip row"]
+
+; @summary The stored words of the choices (same order as V31_FailChoices): "" = macro setting.
+; @tags fail, v31
+V31_FailCodes() => ["", "ask", "stop", "skip", "skiprow", "retry3stop", "retry3skiprow"]
+
+; @summary The cell text for a stored choice ("" and unknown words show as "macro setting").
+; @returns String
+; @tags fail, v31
+V31_FailText(code) {
+    for i, c in V31_FailCodes()
+        if c = code
+            return V31_FailChoices()[i]
+    return V31_FailChoices()[1]
+}
+
+; @summary The stored word for a cell text (case does not matter). Returns {Ok, Code}; a text that is not one of the choices is not Ok.
+; @returns {Ok, Code}
+; @tags fail, v31
+V31_FailCode(text) {
+    t := StrLower(Trim(String(text)))
+    for i, c in V31_FailChoices()
+        if StrLower(c) = t
+            return {Ok: true, Code: V31_FailCodes()[i]}
+    return {Ok: false, Code: ""}
+}
+
+; @summary What to do after a step failed. stepChoice = the step's stored choice ("" = none), macroPolicy = the macro's On failure
+;          setting, triesDone = how many times the step has been tried so far (the failed first run counts as 1).
+;          Returns "retry" (wait 1 s, run only that step again), "stop", "skip" (leave this step out), "nextrow" (skip the rest
+;          of this row), "ask" (the question box), or "macro" (no choice on the step: do what the macro setting says, as before).
+; @returns String
+; @tags fail, v31
+V31_FailPlan(stepChoice, macroPolicy, triesDone) {
+    switch stepChoice {
+        case "ask": return "ask"
+        case "stop": return "stop"
+        case "skip": return "skip"
+        case "skiprow": return "nextrow"
+        case "retry3stop": return triesDone < 3 ? "retry" : "stop"
+        case "retry3skiprow": return triesDone < 3 ? "retry" : "nextrow"
+    }
+    return "macro"
+}
+
+; @summary The Only when cell text: "always" when there is no rule, else the rule; with a note when the preview row leaves the step out
+;          ("→ skipped for row 2") or the rule cannot be worked out. gate = the preview decision {Skip, Err} or "", info = the chain entry or "".
+; @returns String
+; @tags rules, grid, v31
+V31_WhenCell(node, gate, info, settings, number) {
+    w := Trim(String(node.Get("when", "")))
+    txt := w = "" ? "always" : w
+    if IsObject(gate) && gate.Err != ""
+        return txt . "  ⚠ " . gate.Err
+    if IsObject(info) && info.Error != ""
+        return txt . "  ⚠ " . info.Error
+    if IsObject(gate) && gate.Skip {
+        mode := settings is Map ? String(settings.Get("runMode", "once")) : "once"
+        txt .= "  → skipped for " . (mode = "times" ? "round " : "row ") . number
+    }
+    return txt
+}
+
+; @summary True for steps that can have an Only when / If it fails cell (every step, not the blocks that hold steps).
+; @tags rules, v31
+V31_HasRuleCells(node) => node is Map && !VMF_IsContainer(node)
+
+; @summary The names Only when may use in the open macro (list columns, variables the macro sets, built-ins, #).
+; @returns Array
+; @tags rules, v31
+V31_NamesNow() {
+    s := VMB()
+    if !(s.Macro is Map)
+        return V31_RuleNames([])
+    return V31_RuleNames(V30_Headers(s.Macro.Get("settings", "")), V31_MacroVars(s.Macro.Get("blocks", [])))
+}
+
+; @summary True for the grid cells that Delete / Ctrl+X can empty.
+; @tags grid, v31
+V31_Clearable(key) => key = "note" || key = "wait" || key = "when" || key = "failstep"
+
+; @summary The step key a clearable cell is stored in.
+; @tags grid, v31
+V31_ClearKey(key) => key = "note" ? "note" : key = "wait" ? "delayMs" : key = "when" ? "when" : "onFailStep"
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -20763,7 +21547,7 @@ V4_SelfTest(path) {
         v27Keys := Map()
         for col in v27Cols
             v27Keys[col.Key] := 1
-        check("V27 columns: 23 columns (V30 added Repeats), every key different", v27Cols.Length . "/" . v27Keys.Count, "23/23")
+        check("V27 columns: 25 columns (V30 added Repeats, V31 Only when and If it fails), every key different", v27Cols.Length . "/" . v27Keys.Count, "25/25")
         v27Click := Map("type", "click", "button", "Left", "count", 1, "scrX", 300, "scrY", 200,
             "win", Map("exe", "notepad.exe", "cls", "Notepad", "title", "x"), "what", Map("kind", "button", "text", "OK"))
         v27C := V27_Cells(v27Click, v27Ctx)
@@ -21051,12 +21835,12 @@ V4_SelfTest(path) {
         check("V29 col widths: written back in column order", V29_ColWText(v29W, v29Cols), "num=45,inside=300,wait=120")
         check("V29 col widths: empty text is an empty Map", V29_ParseColW("", v29Cols).Count, 0)
         v29O := V29_ParseOrder("note,app,bogus,app,num", v29Cols)
-        check("V29 col order: saved keys first, the rest after in normal order, every column once", v29O.Length . "," . v29O[1] . "," . v29O[2] . "," . v29O[3] . "," . v29O[4], v29Cols.Length . ",23,3,1,2")
+        check("V29 col order: saved keys first, the rest after in normal order, every column once", v29O.Length . "," . v29O[1] . "," . v29O[2] . "," . v29O[3] . "," . v29O[4], v29Cols.Length . ",25,3,1,2")
         v29Seen := Map()
         for v29C in v29O
             v29Seen[v29C] := 1
         check("V29 col order: no column twice", v29Seen.Count, v29Cols.Length)
-        check("V29 col order: empty text gives the normal order", V4_Join(V29_ParseOrder("", v29Cols), ",") = "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23", true)
+        check("V29 col order: empty text gives the normal order", V4_Join(V29_ParseOrder("", v29Cols), ",") = "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25", true)
         check("V29 col order: round trip", V29_OrderText(V29_ParseOrder("wait,note", v29Cols), v29Cols) . "|" . SubStr(V29_OrderText(V29_ParseOrder("wait,note", v29Cols), v29Cols), 1, 9), V29_OrderText(V29_ParseOrder("wait,note", v29Cols), v29Cols) . "|wait,note")
         v29H := V29_ParseHidden("note,bogus, shaky ,note", v29Cols)
         check("V29 hidden columns: known keys only, no repeats", v29H.Count . v29H.Has("note") . v29H.Has("shaky") . "|" . V29_HiddenText(v29H, v29Cols), "211|shaky,note")
@@ -21209,6 +21993,216 @@ V4_SelfTest(path) {
         v31R.Run(v31Old["blocks"])
         check("V31 old hand-made For each block: no stop after 3 bad rows (V30 flag only)", v31R.Skipped . "|" . v31R.StopNote, "4|")
         check("V31 toolbox colours: plain = none, coloured = the entry's own", V31_PalColors(1, [1, 2]) . "|" . V31_PalColors(0, [1, 2])[2] . "|" . V31_PalColors(0, 0), "0|2|0")
+        ; ---- V31 item A: Only when ----
+        v31N := V31_RuleNames(["Name", "Status", "Amount", "Product Description"], ["total"])
+        check("V31 names: # first, columns, values, built-ins, no duplicates", V4_Join(V31_RuleNames(["Name", "name", "x"], ["X", "y"]), ","), "#,Name,x,y,clipboard,date,time,row,index")
+        v31T(rule, row, win := "") {                                   ; parse + test against a row Map (name -> value) and an open-window list
+            r := V31_ParseRule(rule, v31N)
+            if !r.Ok
+                return "ERR"
+            return V31_Test(r.Rule, (nm) => row.Has(nm) ? row[nm] : "", (t) => InStr(win, t) > 0) ? "1" : "0"
+        }
+        v31Row := Map(), v31Row.CaseSense := false
+        for k, v in Map("Name", "Smith", "Status", "On", "Amount", "250", "Product Description", "Blue pill", "total", "1,250", "#", 2)
+            v31Row[k] := v
+        check("V31 rule: Status = On (text, any case) true / false", v31T("Status = On", v31Row) . v31T("status = on", v31Row) . v31T("Status = Off", v31Row), "110")
+        check("V31 rule: Status is On / is not On / <> / != / ==", v31T("Status is On", v31Row) . v31T("Status is not On", v31Row) . v31T("Status <> On", v31Row) . v31T("Status != Off", v31Row) . v31T("Status == On", v31Row), "10011")
+        check("V31 rule: numbers compare as numbers (9 < 10, 250 > 100, 250 >= 250, 250 <= 249, 250 < 1000)", v31T("Amount > 100", v31Row) . v31T("Amount >= 250", v31Row) . v31T("Amount <= 249", v31Row) . v31T("Amount < 1000", v31Row), "1101")
+        check("V31 rule: text order only when both are not numbers (Name > Adams), 9 < 10 as numbers", v31T("Name > Adams", v31Row) . v31T("Name < Adams", v31Row) . v31T("# < 10", v31Row), "101")
+        check("V31 rule: 1,250 counts as the number 1250", v31T("total > 1000", v31Row) . v31T("total = 1250", v31Row), "11")
+        check("V31 rule: contains / does not contain", v31T("Name contains mit", v31Row) . v31T("Name contains xyz", v31Row) . v31T("Name does not contain xyz", v31Row), "101")
+        check("V31 rule: is empty / is not empty (a missing value is empty)", v31T("Name is empty", v31Row) . v31T("Name is not empty", v31Row) . v31T("Amount is empty", Map("Amount", "")), "011")
+        check("V31 rule: quotes around the value are optional and removed", v31T("Status = `"On`"", v31Row) . v31T("Name = 'Smith'", v31Row) . v31T("Name = Smith", v31Row), "111")
+        check("V31 rule: a column name with a space", v31T("Product Description contains pill", v31Row), "1")
+        check("V31 rule: the round number # (= 2 here)", v31T("# = 2", v31Row) . v31T("# > 1", v31Row) . v31T("# > 2", v31Row), "110")
+        check("V31 rule: window Save As is open / is not open (title contains, any program)", v31T("window Save As is open", v31Row, "Save As|x") . v31T("window Save As is open", v31Row, "Other") . v31T("window Save As is not open", v31Row, "Other") . v31T("window `"Save As`" is open", v31Row, "Save As"), "1011")
+        check("V31 rule: and = all, or = any (one level)", v31T("Status = On and Amount > 100", v31Row) . v31T("Status = On and Amount > 900", v31Row) . v31T("Status = Off or Amount > 100", v31Row) . v31T("Status = Off or Amount > 900", v31Row), "1010")
+        check("V31 rule: 'and' inside quotes is part of the value", v31T("Name = `"Smith and Jones`"", Map("Name", "Smith and Jones")), "1")
+        check("V31 rule: three parts joined by and", v31T("Status = On and Amount > 100 and Name contains Sm", v31Row), "1")
+        v31E := V31_ParseRule("Status = On and Amount > 1 or Name = x", v31N)
+        check("V31 rule: mixing and + or is refused with a sentence", v31E.Ok . "|" . (InStr(v31E.Error, "only  and  or only  or") > 0), "0|1")
+        v31E := V31_ParseRule("Colour = red", v31N)
+        check("V31 rule: an unknown name is refused and the sentence names it and the names you can use", v31E.Ok . "|" . (InStr(v31E.Error, "Colour") > 0) . "|" . (InStr(v31E.Error, "Status") > 0), "0|1|1")
+        check("V31 rule: nonsense, a missing value and an empty rule are refused", V31_ParseRule("Status On", v31N).Ok . V31_ParseRule("Status =", v31N).Ok . V31_ParseRule("", v31N).Ok . V31_ParseRule("Status = On and", v31N).Ok, "0000")
+        check("V31 rule: window with no title is refused", V31_ParseRule("window  is open", v31N).Ok, 0)
+        check("V31 otherwise split: plain, alone, comma, no comma, the word inside a rule", V31_SplitOtherwise("Status = On").Other . "|" . V31_SplitOtherwise("otherwise").Other . V31_SplitOtherwise("otherwise").Rest . "|" . V31_SplitOtherwise("Otherwise, Amount > 50").Rest . "|" . V31_SplitOtherwise("otherwise Amount > 50").Rest . "|" . V31_SplitOtherwise("otherwiseX = 1").Other, "0|1|Amount > 50|Amount > 50|0")
+        check("V31 pure: a value that is a number text next to a text one: = is a text compare", v31T("Name = 250", v31Row) . v31T("Amount = 250.0", v31Row), "01")
+        check("V31 pure: < > with an empty value are false (Excel blank is not 0)", v31T("Amount > 5", Map("Amount", "")) . v31T("Amount < 5", Map("Amount", "")), "00")
+        ; ---- V31 item B: chains ----
+        v31S(w) {
+            m := Map("type", "text", "text", "x")
+            if w != ""
+                m["when"] := w
+            return m
+        }
+        v31Ch(steps) {
+            out := ""
+            for inf in V31_Chains(steps)
+                out .= (out = "" ? "" : " ") . inf.Chain . "." . inf.Branch . (inf.Kind = "" ? "" : inf.Kind = "if" ? "i" : inf.Kind = "elseif" ? "e" : "o") . (inf.First ? "!" : "") . (inf.Error != "" ? "E" : "")
+            return out
+        }
+        check("V31 chains: no rules = no chain", v31Ch([v31S(""), v31S("")]), "0.0 0.0")
+        check("V31 chains: if only", v31Ch([v31S("Status = On"), v31S("")]), "1.1i! 0.0")
+        check("V31 chains: if + otherwise", v31Ch([v31S("A = 1"), v31S("otherwise")]), "1.1i! 1.2o!")
+        check("V31 chains: if + else-if + otherwise", v31Ch([v31S("A = 1"), v31S("otherwise, A = 2"), v31S("otherwise")]), "1.1i! 1.2e! 1.3o!")
+        check("V31 chains: two-step branches (same rule text = same branch, any case / spacing)", v31Ch([v31S("A = 1"), v31S("a  =  1"), v31S("otherwise"), v31S("otherwise")]), "1.1i! 1.1i 1.2o! 1.2o")
+        check("V31 chains: a plain step ends the chain; otherwise after it is refused", v31Ch([v31S("A = 1"), v31S(""), v31S("otherwise")]), "1.1i! 0.0 0.0E")
+        check("V31 chains: otherwise with nothing above is refused", v31Ch([v31S("otherwise"), v31S("A = 1")]), "0.0E 1.1i!")
+        check("V31 chains: a new rule after the chain starts a new chain", v31Ch([v31S("A = 1"), v31S("otherwise"), v31S("B = 2"), v31S("otherwise")]), "1.1i! 1.2o! 2.1i! 2.2o!")
+        check("V31 chains: an otherwise after an otherwise with another text can never run", v31Ch([v31S("A = 1"), v31S("otherwise"), v31S("otherwise, A = 5")]), "1.1i! 1.2o! 0.0E")
+        v31Off := v31S("otherwise"), v31Off["disabled"] := 1
+        check("V31 chains: a switched-off step in between does not break the chain", v31Ch([v31S("A = 1"), v31Off, v31S("otherwise")]), "1.1i! 0.0 1.2o!")
+        check("V31 chains: ids continue after a base", V31_Chains([v31S("A = 1")], 4)[1].Chain, 5)
+        v31St := V31_NewState()
+        check("V31 decide: if true / false", V31_Decide(v31St, {First: true, Kind: "if"}, true).Run . V31_Decide(v31St, {First: true, Kind: "if"}, false).Run, "10")
+        check("V31 decide: else-if runs only when nothing ran and its rule is true", V31_Decide({Taken: false, Run: false}, {First: true, Kind: "elseif"}, true).Run . V31_Decide({Taken: false, Run: false}, {First: true, Kind: "elseif"}, false).Run . V31_Decide({Taken: true, Run: true}, {First: true, Kind: "elseif"}, true).Run, "100")
+        check("V31 decide: else runs only when nothing ran", V31_Decide({Taken: false, Run: false}, {First: true, Kind: "else"}, false).Run . V31_Decide({Taken: true, Run: false}, {First: true, Kind: "else"}, false).Run, "10")
+        check("V31 decide: a later step of a branch follows the branch", V31_Decide({Taken: true, Run: true}, {First: false, Kind: "if"}, false).Run . V31_Decide({Taken: true, Run: false}, {First: false, Kind: "if"}, true).Run, "10")
+        check("V31 needs rule: if yes; else-if only while nothing ran; else never; later steps never", V31_NeedsRule(v31St, {First: true, Kind: "if"}) . V31_NeedsRule(v31St, {First: true, Kind: "elseif"}) . V31_NeedsRule({Taken: true, Run: false}, {First: true, Kind: "elseif"}) . V31_NeedsRule(v31St, {First: true, Kind: "else"}) . V31_NeedsRule(v31St, {First: false, Kind: "if"}), "11000")
+        ; the whole chain, run through V31_Gate for different rows (A = value)
+        v31Pick(a) {
+            steps := [v31S("A = 1"), v31S("a = 1"), v31S("otherwise, A = 2"), v31S("otherwise"), v31S("")]
+            infos := V31_Chains(steps), states := Map(), out := ""
+            for i, inf in infos
+                out .= V31_Gate(inf, states, (txt) => V31_EvalText(txt, ["A"], (nm) => a, (t) => false)) ? "1" : "0"
+            return out
+        }
+        check("V31 gate: A=1 runs the two-step if branch and the plain step", v31Pick(1), "11001")
+        check("V31 gate: A=2 runs only the else-if branch", v31Pick(2), "00101")
+        check("V31 gate: A=9 runs only the otherwise branch", v31Pick(9), "00011")
+        rejects("V31 gate: otherwise with nothing above throws the plain sentence", () => V31_Gate(V31_Chains([v31S("otherwise")])[1], Map(), (t) => true))
+
+        ; ---- V31 items A / B / C: the runner, the cells and the plans ----
+        v31Out(text, w := "", fail := "") {                            ; a step that adds text to the variable out
+            m := Map("type", "set", "name", "out", "value", "{{out}}" . text)
+            if w != ""
+                m["when"] := w
+            if fail != ""
+                m["onFailStep"] := fail
+            return m
+        }
+        v31Run(rows, blocks, vars := "") {                             ; like v31Play, with the variable out already set
+            m := Map("format", "VisualMacro", "version", 4, "name", "t", "settings", Map("onFail", "coords", "runMode", "list", "list", V30_NewList(["Name", "Status", "Amount"], rows)), "blocks", blocks)
+            b := V30_BuildRun(m)
+            r := V4Runner(b.Macro, {Data: V30_ListData(m["settings"]), FirstRow: 1, LastRow: 0})
+            r.Vars["out"] := ""
+            if vars is Map
+                for k, v in vars
+                    r.Vars[k] := v
+            res := {Runner: r, Error: "", Signal: ""}
+            try res.Signal := r.Run(b.Macro["blocks"])
+            catch as e
+                res.Error := e.Message
+            return res
+        }
+        v31Rows := [["Anna", "On", "150"], ["Bob", "Off", "500"], ["Cy", "On", "20"], ["Di", "On", "100"]]
+        v31Plan4 := [Map("type", "stop", "action", "continue", "when", "Status = Off"), v31Out("{{Name}}"), v31Out(" big", "Amount > 100"), v31Out(" small", "otherwise"), v31Out("|")]
+        v31R := v31Run(v31Rows, v31Plan4)
+        check("V31 run: the plan's 4 rows - Off row left out, big / small by Amount, plain step always", v31R.Runner.Vars["out"] . "|" . v31R.Error, "Anna big|Cy small|Di small||")
+        check("V31 run: a row left out by Skip this row is not a bad row (no skipped, no RowLog), steps left out by a rule are not failures", v31R.Runner.RowLog.Count . "|" . v31R.Runner.Skipped . "|" . v31R.Runner.BadStreak . "|" . v31R.Runner.WhenSkipped, "0|0|0|6")
+        v31R := v31Run(v31Rows, [Map("type", "stop", "action", "continue", "when", "Status = Off"), v31Out("{{Name}}"), v31Out("+", "Amount >= 150"), v31Out("-", "otherwise, Amount > 50"), v31Out("0", "otherwise"), v31Out("|")])
+        check("V31 run: if + else-if + otherwise by Amount (150, 20, 100)", v31R.Runner.Vars["out"], "Anna+|Cy0|Di-|")
+        v31R := v31Run(v31Rows, [v31Out("{{Name}}"), v31Out("A", "Status = On"), v31Out("B", "Status = On"), v31Out("x", "otherwise"), v31Out("y", "otherwise"), v31Out("|")])
+        check("V31 run: two-step branches run both steps of the branch", v31R.Runner.Vars["out"], "AnnaAB|Bobxy|CyAB|DiAB|")
+        v31R := v31Run(v31Rows, [v31Out("{{Name}}"), v31Out("n", "# = 2"), v31Out("|")])
+        check("V31 run: # is the row number in a list run", v31R.Runner.Vars["out"], "Anna|Bobn|Cy|Di|")
+        v31R := v31Run(v31Rows, [v31Out("{{Name}}"), v31Out("!", "Name contains y or Name is empty"), v31Out("|")])
+        check("V31 run: contains + or", v31R.Runner.Vars["out"], "Anna|Bob|Cy!|Di|")
+        v31R := v31Run(v31Rows, [v31Out("{{Name}}"), v31Out("!", "Colour = red")])
+        check("V31 run: a rule that names something that does not exist stops the run with a sentence naming it", (InStr(v31R.Error, "Colour") > 0) . "|" . v31R.Runner.Vars["out"] . "|" . v31R.Runner.RowsSeen, "1|Anna|1")
+        v31R := v31Run(v31Rows, [v31Out("{{Name}}"), v31Out("!", "otherwise")])
+        check("V31 run: otherwise with nothing above in a saved file stops the run with a sentence", (InStr(v31R.Error, "otherwise needs a step") > 0) . "|" . v31R.Runner.Vars["out"], "1|Anna")
+        v31R := v31Run(v31Rows, [v31Out("{{Name}}"), Map("type", "stop", "action", "endrun", "when", "Name = Cy"), v31Out("|")])
+        check("V31 run: Stop the run (endrun) with a rule ends everything at row 3", v31R.Signal . "|" . v31R.Runner.Vars["out"], "endrun|Anna|Bob|Cy")
+        v31R := v31Run(v31Rows, [v31Out("{{Name}}", "Status = On"), v31Out("{{Amount}}", "otherwise"), v31Out("|")], Map("Status", "X"))
+        check("V31 run: the list row comes before a runner variable of the same name", v31R.Runner.Vars["out"], "Anna|500|Cy|Di|")
+        v31R := v31Run(v31Rows, [v31Out("{{Name}}"), v31Out("T", "Last = 1"), v31Out("|")], Map("Last", "1"))
+        check("V31 run: a runner variable can be used in a rule", v31R.Runner.Vars["out"], "AnnaT|BobT|CyT|DiT|")
+        ; old macro: a step without when / onFailStep behaves as before, and a hand-made If block is untouched
+        v31Old := Map("format", "VisualMacro", "version", 4, "settings", Map("onFail", "stop"), "blocks", [Map("type", "set", "name", "q", "value", "a"), Map("type", "if", "cond", "var", "name", "q", "op", "=", "value", "a", "body", [Map("type", "set", "name", "q", "value", "b")], "else", [])])
+        v31R := V4Runner(v31Old, {})
+        v31R.Run(v31Old["blocks"])
+        check("V31 old macro and hand-made If block run as before (no chain info is even built)", v31R.Vars["q"] . "|" . v31R.WhenSkipped . "|" . (v31R.V31Infos(v31Old["blocks"]) = ""), "b|0|1")
+        ; item C: failures
+        v31Flaky(choice, rows := "", flakyAt := 1500) {
+            m := Map("format", "VisualMacro", "version", 4, "name", "t", "settings", Map("onFail", "stop", "runMode", "list", "list", V30_NewList(["Name", "Status", "Amount"], rows = "" ? [["a", "On", "1"]] : rows)),
+                "blocks", [Map("type", "set", "name", "w", "value", "{{flaky}}", "onFailStep", choice), v31Out("done")])
+            b := V30_BuildRun(m)
+            r := V4Runner(b.Macro, {Data: V30_ListData(m["settings"]), FirstRow: 1, LastRow: 0})
+            r.Vars["out"] := ""
+            if flakyAt > 0
+                SetTimer(() => (r.Vars["flaky"] := "ok"), -flakyAt)
+            res := {Runner: r, Error: "", Signal: ""}
+            t0 := A_TickCount
+            try res.Signal := r.Run(b.Macro["blocks"])
+            catch as e
+                res.Error := e.Message
+            res.Ms := A_TickCount - t0
+            SetTimer(() => 0, 0)
+            return res
+        }
+        v31F := v31Flaky("retry3stop")
+        check("V31 fail: try 3 times - fails twice (waits 1 s each), works the third time, the run goes on", v31F.Runner.Vars.Get("w", "") . "|" . v31F.Runner.Vars["out"] . "|" . v31F.Error . "|" . (v31F.Ms >= 1900 && v31F.Ms < 4500), "ok|done||1")
+        v31F := v31Flaky("retry3stop", "", 0)
+        check("V31 fail: try 3 times, then stop - never works: stops the run with the step's sentence after 3 tries", (InStr(v31F.Error, "flaky") > 0) . "|" . v31F.Runner.Vars["out"] . "|" . (v31F.Ms >= 1900), "1||1")
+        v31F := v31Flaky("retry3skiprow", [["a", "On", "1"], ["b", "On", "2"]], 0)
+        check("V31 fail: try 3 times, then skip row - row 1 skipped (logged), row 2 tried too, no stop yet", v31F.Runner.RowLog.Count . "|" . v31F.Runner.RowsSeen . "|" . v31F.Error, "2|2|")
+        v31F := v31Flaky("skip", "", 0)
+        check("V31 fail: skip this step - the next step still runs, counted as skipped", v31F.Runner.Vars["out"] . "|" . v31F.Runner.Skipped . "|" . v31F.Error, "done|1|")
+        v31F := v31Flaky("skiprow", [["a", "On", "1"], ["b", "On", "2"]], 0)
+        check("V31 fail: skip this row - the rest of each row is not done", v31F.Runner.Vars["out"] . "|" . v31F.Runner.RowLog.Count, "|2")
+        v31F := v31Flaky("stop", "", 0)
+        check("V31 fail: stop - the step's error ends the run", (InStr(v31F.Error, "flaky") > 0) . "|" . v31F.Runner.Vars["out"], "1|")
+        v31F := v31Flaky("", "", 0)
+        check("V31 fail: no choice on the step = the macro's own setting (a list run skips the row) as before", (InStr(v31F.Error, "flaky") > 0) . "|" . v31F.Runner.RowLog.Count, "0|1")
+        check("V31 fail plan: every choice, tries 1 / 2 / 3", V31_FailPlan("retry3stop", "ask", 1) . V31_FailPlan("retry3stop", "ask", 2) . "," . V31_FailPlan("retry3stop", "ask", 3) . "," . V31_FailPlan("retry3skiprow", "stop", 2) . "," . V31_FailPlan("retry3skiprow", "stop", 3), "retryretry,stop,retry,nextrow")
+        check("V31 fail plan: ask / stop / skip / skiprow / none", V31_FailPlan("ask", "skip", 1) . "," . V31_FailPlan("stop", "skip", 1) . "," . V31_FailPlan("skip", "stop", 1) . "," . V31_FailPlan("skiprow", "stop", 1) . "," . V31_FailPlan("", "nextrow", 1), "ask,stop,skip,nextrow,macro")
+        check("V31 fail text / code: round trip for every choice, unknown shows the macro setting", V31_FailText(V31_FailCode("try 3 times, then skip row").Code) . "|" . V31_FailText("junk") . "|" . V31_FailCode("junk").Ok . "|" . V31_FailChoices().Length . V31_FailCodes().Length, "try 3 times, then skip row|macro setting|0|77")
+        ; cells, plans, grid
+        v31N1 := Map("type", "text", "text", "x")
+        check("V31 cells: Only when shows always, the rule, and the preview note; If it fails shows the macro setting", V31_WhenCell(v31N1, "", "", Map(), 1) . "|" . V31_WhenCell(Map("when", "Amount > 5"), "", "", Map(), 1) . "|" . V31_WhenCell(Map("when", "Amount > 5"), {Skip: true, Err: "", Rule: ""}, "", Map("runMode", "list"), 2) . "|" . V31_WhenCell(Map("when", "A = 1"), {Skip: true, Err: "", Rule: ""}, "", Map("runMode", "times"), 3) . "|" . V27_Cells(v31N1, Map())["failstep"] . "|" . V27_Cells(v31N1, Map())["when"], "always|Amount > 5|Amount > 5  → skipped for row 2|A = 1  → skipped for round 3|macro setting|always")
+        check("V31 cells: when / onFailStep show in the grid cells", V27_Cells(Map("type", "text", "text", "x", "when", "A = 1", "onFailStep", "skiprow"), Map())["when"] . "|" . V27_Cells(Map("type", "text", "text", "x", "when", "A = 1", "onFailStep", "skiprow"), Map())["failstep"], "A = 1|skip this row")
+        check("V31 grid: the two columns come right after Repeats", V27_Columns()[17].Key . V27_Columns()[18].Key . V27_Columns()[19].Key, "repeatswhenfailstep")
+        check("V31 edit: Only when is a text cell and If it fails a drop-down for a step, neither for a block", (V28_Editable(v31N1, "when") = "text") . "|" . (V28_Editable(v31N1, "failstep") is Array) . "|" . V28_Editable(v31N1, "failstep").Length . "|" . V28_Editable(Map("type", "repeat", "body", []), "when") . V28_Editable(Map("type", "repeat", "body", []), "failstep"), "1|1|7|")
+        v31W := V28_ApplyCell(v31N1, "when", "  #   =  2 ")
+        check("V31 edit: a good rule is stored trimmed; a bad one is refused and the node is untouched", v31W.Ok . "|" . v31N1["when"] . "|" . V28_ApplyCell(v31N1, "when", "Colour = red").Ok . "|" . v31N1["when"], "1|# = 2|0|# = 2")
+        v31W := V28_ApplyCell(v31N1, "when", "Colour = red")
+        check("V31 edit: a refused rule gives the plain sentence", (InStr(v31W.Error, "is not a name I know") > 0) . "|" . (InStr(v31W.Error, "Names you can use") > 0), "1|1")
+        check("V31 edit: always / empty remove the rule", V28_ApplyCell(v31N1, "when", "always").Ok . v31N1.Has("when"), "10")
+        v31W := V28_ApplyCell(v31N1, "when", "otherwise")
+        check("V31 edit: otherwise with nothing above is refused with a sentence (node unchanged)", v31W.Ok . "|" . (InStr(v31W.Error, "right above") > 0) . "|" . v31N1.Has("when"), "0|1|0")
+        v31Up := Map("type", "text", "text", "u", "when", "A = 1")
+        v31W := V31_CheckWhen([v31Up, v31N1], v31N1, "otherwise, A = 2", ["A", "#"])
+        check("V31 edit: otherwise is fine when the step above has a rule; with a rule that cannot be read it is not", v31W . "|" . (V31_CheckWhen([v31Up, v31N1], v31N1, "otherwise, Z = 2", ["A", "#"]) != ""), "|1")
+        check("V31 edit: a plain otherwise after a step with a rule is fine, a second distinct otherwise after it is not", V31_CheckWhen([v31Up, v31N1], v31N1, "otherwise", ["A"]) . "|" . (V31_CheckWhen([v31Up, Map("type", "text", "when", "otherwise"), v31N1], v31N1, "otherwise, A = 5", ["A"]) != ""), "|1")
+        check("V31 edit: If it fails stores a word; macro setting removes it; Delete (empty) too; junk is refused", V28_ApplyCell(v31N1, "failstep", "try 3 times, then stop").Ok . v31N1["onFailStep"] . "|" . V28_ApplyCell(v31N1, "failstep", "Skip This Row").Ok . v31N1["onFailStep"] . "|" . V28_ApplyCell(v31N1, "failstep", "macro setting").Ok . v31N1.Has("onFailStep") . "|" . V28_ApplyCell(v31N1, "failstep", "never").Ok, "1retry3stop|1skiprow|10|0")
+        v31N1["onFailStep"] := "stop"
+        check("V31 edit: an empty value (the Delete key) puts the choice back to the macro setting", V28_Plan(v31N1, "failstep", "").Ok . V28_Plan(v31N1, "failstep", "").Changes[1].Del, "11")
+        check("V31 edit: the editor opens with the stored rule / the shown choice", V28_EditText(Map("type", "text", "when", "A = 1"), "when") . "|" . V28_EditText(v31N1, "failstep"), "A = 1|stop")
+        check("V31 edit: Delete / Cut can empty the two new cells", V31_Clearable("when") . V31_Clearable("failstep") . V31_Clearable("text") . "|" . V31_ClearKey("failstep") . V31_ClearKey("when"), "110|onFailStepwhen")
+        v31Set := Map("runMode", "list", "list", V30_NewList(["Name", "Status", "Amount"], v31Rows))
+        v31Blocks := [Map("type", "stop", "action", "continue", "when", "Status = Off"), v31Out("{{Name}}"), v31Out(" big", "Amount > 100"), v31Out(" small", "otherwise")]
+        v31Pre := V31_PreviewFor(v31Blocks, v31Set, 2)
+        check("V31 preview: row 2 (Bob, Off, 500) - the Skip step runs (rule true), big runs, small is left out", (v31Pre[v31Blocks[1]].Skip ? "S" : "r") . (v31Pre[v31Blocks[3]].Skip ? "S" : "r") . (v31Pre[v31Blocks[4]].Skip ? "S" : "r") . "|" . v31Pre.Has(v31Blocks[2]), "rrS|0")
+        v31Pre := V31_PreviewFor(v31Blocks, v31Set, 3)
+        check("V31 preview: row 3 (Cy, On, 20) - Skip step is left out, big left out, small runs", (v31Pre[v31Blocks[1]].Skip ? "S" : "r") . (v31Pre[v31Blocks[3]].Skip ? "S" : "r") . (v31Pre[v31Blocks[4]].Skip ? "S" : "r"), "SSr")
+        check("V31 preview: an old macro (no list, run once) shows nothing", V31_PreviewFor(v31Blocks, Map(), 1).Count, 0)
+        v31PreStep := v31Out("a", "Colour = red")
+        v31Pre := V31_PreviewFor([v31PreStep], v31Set, 1)
+        check("V31 preview: a rule that cannot be worked out is not greyed and carries the sentence", v31Pre.Count . "|" . v31Pre[v31Pre.Count ? v31PreStep : v31PreStep].Skip . "|" . (InStr(v31Pre[v31PreStep].Err, "Colour") > 0), "1|0|1")
+        v31Rows2 := V27_Rows(v31Blocks, v31Set, Map("Preview", 3))
+        check("V31 grid rows: preview row 3 - the greyed rows are 1 and 3; chain ids: 0, 1, 1 (a plain step in between, then one chain)", (v31Rows2[1].Grey ? 1 : 0) . (v31Rows2[2].Grey ? 1 : 0) . (v31Rows2[3].Grey ? 1 : 0) . (v31Rows2[4].Grey ? 1 : 0) . "|" . v31Rows2[1].Chain . v31Rows2[2].Chain . v31Rows2[3].Chain . v31Rows2[4].Chain, "1010|1022")
+        check("V31 grid rows: the Only when cell of a greyed row says which row", InStr(v31Rows2[1]["when"], "skipped for row 3") > 0, 1)
+        check("V31 chain colours: same chain = same colour, neighbours differ, wraps after 6", (V31_ChainColor(1) = V31_ChainColor(1)) . (V31_ChainColor(1) != V31_ChainColor(2)) . (V31_ChainColor(7) = V31_ChainColor(1)), "111")
+        v31Mi := V31_MacroInfos([Map("type", "repeat", "count", 2, "body", [v31Up, v31Out("o", "otherwise")]), v31Out("z", "B = 1")])
+        v31MiN := 0
+        for nd, inf in v31Mi
+            v31MiN := Max(v31MiN, inf.Chain)
+        check("V31 macro infos: chains inside blocks get their own ids; ids are unique in the macro", v31Mi.Count . "|" . v31MiN, "4|2")
+        check("V31 macro vars: Set / For / Change names are known to rules", V4_Join(V31_MacroVars([Map("type", "set", "name", "a"), Map("type", "repeat", "body", [Map("type", "change", "name", "b")])]), ","), "a,b")
+        check("V31 builder: rule text from name / comparison / value", V31_BuildRuleText("Status", "=", "On") . "|" . V31_BuildRuleText("Name", "is empty", "") . "|" . V31_BuildRuleText("Name", "contains", "a and b") . "|" . V31_BuildRuleText("", "window is open", "Save As"), "Status = On|Name is empty|Name contains `"a and b`"|window Save As is open")
+        check("V31 builder: what it builds reads back as a rule", V31_ParseRule(V31_BuildRuleText("Name", "contains", "a and b"), ["Name"]).Ok . V31_ParseRule(V31_BuildRuleText("Name", "is not empty", ""), ["Name"]).Ok . V31_ParseRule(V31_BuildRuleText("", "window is not open", "Save As"), ["Name"]).Ok, "111")
+
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
         check("No active #Include directives", !RegExMatch(player, "m)^#Include"))
