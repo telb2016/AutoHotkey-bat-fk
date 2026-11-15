@@ -15490,7 +15490,7 @@ V27_Cells(node, ctx) {
     m["num"] := ctx.Get("Num", "")
     m["inside"] := ctx.Get("Inside", "")
     m["app"] := ctx.Get("App", "")
-    m["window"] := V27_WindowText(node)
+    m["window"] := V27_WindowText(node, V27_MainClass(ctx.Get("Settings", "")))
     m["winsize"] := own != "" ? own : ctx.Get("Size", "")
     m["action"] := V27_ActionText(node)
     m["target"] := V27_TargetText(node)
@@ -15517,10 +15517,20 @@ V27_Cells(node, ctx) {
     return m
 }
 
+; @summary Window class of the macro's Macro-window setting (defaultTarget, e.g. "ahk_class Notepad ahk_exe notepad.exe"); "" when none.
+; @tags grid, cells, v27
+V27_MainClass(settings) {
+    if !(settings is Map)
+        return ""
+    if RegExMatch(String(settings.Get("defaultTarget", "")), "i)ahk_class\s+(\S+)", &mm)
+        return mm[1]
+    return ""
+}
+
 ; @summary Kind of window a step uses, in plain words: "main window" (this program's own class), "dialog", "menu",
 ;          else the class name. Use Window / Normalize steps show their target's class. "" when none.
 ; @tags grid, cells, v27
-V27_WindowText(node, mainCls := "AutoHotkeyGUI") {
+V27_WindowText(node, mainCls := "") {
     t := node.Get("type", "")
     cls := ""
     if t = "det_use_window" || t = "det_normalize_win" {
@@ -15533,7 +15543,7 @@ V27_WindowText(node, mainCls := "AutoHotkeyGUI") {
     }
     if cls = ""
         return ""
-    if cls = mainCls
+    if mainCls != "" && cls = mainCls
         return "main window"
     if cls = "#32770"
         return "dialog"
@@ -16921,7 +16931,12 @@ V4_SelfTest(path) {
         check("V27 wait text: a set delay", V27_Cells(Map("type", "click", "button", "Left", "count", 1, "delayMs", 500), v27Ctx)["wait"], "500 ms*")
         check("V27 disabled step is off", V27_Cells(Map("type", "text", "text", "x", "disabled", 1), v27Ctx)["onoff"], "off")
         check("V27 window kind: dialog", V27_WindowText(Map("type", "click", "win", Map("cls", "#32770"))), "dialog")
-        check("V27 window kind: main window", V27_WindowText(Map("type", "click", "win", Map("cls", "AutoHotkeyGUI"))), "main window")
+        check("V27 window kind: main window", V27_WindowText(Map("type", "click", "win", Map("cls", "Notepad")), "Notepad"), "main window")
+        check("V27 window kind: not the main window", V27_WindowText(Map("type", "click", "win", Map("cls", "Notepad")), "Chrome_WidgetWin_1"), "Notepad")
+        check("V27 window kind: no Macro window set", V27_WindowText(Map("type", "click", "win", Map("cls", "AutoHotkeyGUI"))), "AutoHotkeyGUI")
+        check("V27 main class from setting", V27_MainClass(Map("defaultTarget", "ahk_class Notepad ahk_exe notepad.exe")), "Notepad")
+        check("V27 main class: none", V27_MainClass(Map()), "")
+        check("V27 cells: window uses Macro-window class", V27_Cells(Map("type", "click", "win", Map("cls", "Notepad")), Map("Settings", Map("defaultTarget", "ahk_class Notepad")))["window"], "main window")
         check("V27 window kind: maximized size", V27_OwnSize(Map("type", "click", "geo", Map("max", 1))), "maximized")
         check("V27 inside: top level is a dash", V27_InsideText([]), "–")
         check("V27 inside: the chain", V27_InsideText(["Repeat 5 times", "If amount is 250"]), "Repeat 5 times › If amount is 250")
