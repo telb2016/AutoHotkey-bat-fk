@@ -2993,7 +2993,7 @@ VMB_Play(onlySelected := false, startMode := "run", runTo := 0) {
         opts.ResultsPath := s.Dir . "\results\" . RegExReplace(name, "[\\/:*?`"<>|]", "_") . "-"
             . FormatTime(, "yyyyMMdd-HHmmss") . ".csv"
     }
-    if !onlySelected && startMode = "run" && s.Preflight && settings.Get("steady", 0) {      ; V24: the whole macro, editor only
+    if V34_PreflightGate(onlySelected, startMode, s.Preflight) {      ; V24 / V34: the whole macro, editor only; no longer needs Steady playback
         V18_WaitModsUp()                ; the box must not see Ctrl+Shift+P still held down
         if !V24_ReadyToPlay(macro, settings)
             return
@@ -24403,6 +24403,13 @@ V34_ShowUnder(m, ctl) {
     m.Show()
 }
 
+; ---- V34 finding 5: "Ready to play?" does not depend on Steady playback ---------------------------------------------
+
+; @summary True when the Ready-to-play check runs: a whole-macro Play from the editor with "Check before playing" on.
+;          (V33 also asked for Steady playback, which Easy mode hides, so Easy mode never got the box.)
+; @tags macro, playback, preflight, v34
+V34_PreflightGate(onlySelected, startMode, preflightOn) => !onlySelected && startMode = "run" && preflightOn ? true : false
+
 ; ==== V34 END (new V34 functions are added above this line)
 
 ; ============================================================================
@@ -26573,6 +26580,12 @@ V4_SelfTest(path) {
         check("V34 menu: under a button", V34_UnderSpot(1000, 80, 220, 3840).X . "," . V34_UnderSpot(1000, 80, 220, 3840).Y, "1000,80")
         check("V34 menu: kept on the screen", V34_UnderSpot(3800, 80, 220, 3840).X, 3620)
         check("V34 menu: no window gives the point back", V34_EventToScreen(0, 5, 6).X . "," . V34_EventToScreen(0, 5, 6).Y, "5,6")
+        check("V34 preflight gate: whole macro, check on", V34_PreflightGate(false, "run", 1), true)
+        check("V34 preflight gate: no Steady needed (Easy mode)", V34_PreflightGate(false, "run", 1) && !VMF_FromSteps(Map("steps", []))["settings"].Has("steady"), true)
+        check("V34 preflight gate: check off", V34_PreflightGate(false, "run", 0), false)
+        check("V34 preflight gate: a selected block only", V34_PreflightGate(true, "run", 1), false)
+        check("V34 preflight gate: run-to / step modes", V34_PreflightGate(false, "step", 1), false)
+        check("V34 preflight: a closed program is reported without Steady", V24_Preflight([Map("type", "click", "win", Map("exe", "notepad.exe"))], Map(), Map(), "").Length, 1)
         check("V34 steady runner: a settle wait is only for steady input steps", V34_FloorMs(V18_Steady(V4Runner(VMF_NewMacro(), {})), VMF_NewMacro()["settings"]), 120)
     } catch as err {
         failures += 1
