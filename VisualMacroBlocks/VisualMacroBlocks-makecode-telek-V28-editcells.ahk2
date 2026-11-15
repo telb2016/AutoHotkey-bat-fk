@@ -1,3 +1,6 @@
+; VisualMacroBlocks-makecode-telek-V28
+; V28 = V27 + editing cells right in the grid, like Excel: double-click, F2, Enter or just start typing; Enter / Tab / Esc;
+;       Delete clears a Note or Waits cell, Ctrl+D copies the cell above. Every cell change can be undone with Ctrl+Z.
 ; VisualMacroBlocks-makecode-telek-V27
 ; V27 = V26 + an Excel-style step grid: a real table (one row per step, every cell filled, grid lines) next to the old list.
 ;       [List] [Grid] buttons switch the view; the grid only shows the steps, editing and order stay the same.
@@ -305,7 +308,7 @@ VMB_Main() {
 VMB_BuildGui() {
     s := VMB()
     s.Easy := Integer(IniRead(s.Ini, "V17", "EasyMode", 1)) ? 1 : 0
-    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V27")
+    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V28")
     g.SetFont("s9", "Segoe UI")
     c := s.Ctl, lbl := s.Lbl
     c["Record"] := g.AddButton("xm ym w105 h30", "&Record")
@@ -3409,7 +3412,7 @@ VMB_UpdateTitle() {
     if s.Path != ""
         SplitPath(s.Path, &name)
     savedTag := s.Dirty ? " *" : (s.LastSavedAt != "" ? " (saved " . s.LastSavedAt . ")" : "")
-    s.Gui.Title := "Visual Macro Blocks V27" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
+    s.Gui.Title := "Visual Macro Blocks V28" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
     V7_SyncIdleHud()
 }
 
@@ -12629,6 +12632,11 @@ V17_EasyHelp(*) {
         . "  the last 10 runs - check this step)."
         . "`n• Right-click the list -> Show columns (or the Columns tick box in the Step settings panel) for the V21 lines."
         . "`n`nNeed CSV rows, web pages, pictures or anything else? Click 'More features ▸' (Ctrl+Shift+E)."
+        . "`n`nNEW IN V28: you can change a value right in the grid. Double-click a cell (or select a row, press Left / Right to pick the"
+        . " column, then F2 or Enter, or just start typing). Enter saves and goes down, Tab saves and goes to the next cell you can change,"
+        . " Esc cancels. Delete clears a Note or Waits cell, Ctrl+D copies the cell above. Ctrl+Z undoes a change."
+        . " You can edit: Text / keys, Button, Clicks, Held keys, X, Y, Waits first, Scroll back, Window size, On and Note."
+        . " The other cells are worked out; double-click them to open the full Edit box. A Waits value of 2 means 2 seconds (below 30 = seconds)."
         . "`n`nNEW IN V27: the [List] [Grid] buttons above the steps switch to a table with one row per step and every detail in its own"
         . " cell (program, window, size, action, spot, keys...). A dash (–) means it does not apply to that step. The grid is only a view: Edit,"
         . " Delete and the other buttons work on the selected row as before. Click a column title to sort (only the view changes, not the"
@@ -17255,7 +17263,15 @@ V4_ExportPlayer(*) {
         MsgBox(err.Message, "V10 export failed", "Iconx")
 }
 V4_Help(*) {
-    MsgBox("NEW IN V27 (the step grid):"
+    MsgBox("NEW IN V28 (edit cells in the grid):"
+        . "`n• Double-click a cell, or press F2 / Enter on it, or just start typing: a small box opens on the cell. Enter saves and moves"
+        . "  down, Tab saves and goes to the next cell you can change (Shift+Tab goes back), Esc cancels, clicking elsewhere saves."
+        . "  Left / Right choose the column when you use the keyboard. Every change can be undone with Ctrl+Z."
+        . "`n• You can edit: Text / keys (a Press step shows its raw keys, like ^{a}), Button, Clicks, Held keys, X, Y, Waits first"
+        . "  (2, 2s, 500ms or auto; a number below 30 means seconds), Scroll back (a row number, or no), Window size (800 x 600 or maximized),"
+        . "  On and Note. The other cells are worked out from the step: F2 says so, and double-click opens the full Edit box."
+        . "`n• Delete clears a Note or Waits cell. Ctrl+D copies the cell above into this one."
+        . "`n`nNEW IN V27 (the step grid):"
         . "`n• The [List] [Grid] buttons above the steps switch between the tree and a table: one row per step, every detail in"
         . "  its own cell. A dash (–) means the column does not apply to that step. The grid is only a view: select a row and use"
         . "  Edit, Delete, Move up / down as usual; double-click a row edits it; right-click shows the same menu as the list."

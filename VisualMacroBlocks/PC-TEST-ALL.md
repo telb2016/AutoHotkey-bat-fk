@@ -29,3 +29,19 @@ Open a macro with steps in at least two programs (and, if you can, a Repeat bloc
 5. Press Play with a filter typed: the filter clears, the running row is selected and scrolls into view; after the run the filter is back.
 6. Click **Copy table**, paste into Excel: a header row, and each value lands in its own cell. Select one row, press Ctrl+C, paste: that row only.
 7. Click **[List]**: the tree is back exactly as before, and the filter row is gone. The step numbers in the grid (they can skip a number where a Repeat / If block has one) are the same as in the list.
+
+## 4. Edit cells (V28 file: `VisualMacroBlocks-makecode-telek-V28-editcells.ahk2`)
+
+Open a macro with a click, a Type step and a Press step. The [Grid] button must be on. Try it at 100% and, if you can, at 125% / 150% screen scaling.
+
+1. Double-click a **Waits first** cell, type `2`, press Enter: the cell shows `2 s*`. Press Ctrl+Z: it is back to what it was. The little box must sit exactly on the cell (same left, top, width and height), also after you scroll the grid sideways.
+2. Change a **Type** step's text in the grid, press Play: the new text is typed.
+3. Change **Clicks** from 1 to 2 (the box is a drop-down): the Action column changes to Double-click.
+4. Type `abc` into an **X** cell and press Enter: nothing changes, the box stays open and the status bar says why. Press Esc.
+5. Select a row, press Right until the status bar says `Cell: Program`, press F2: the status bar says the cell is worked out from the step, and double-click on it opens the normal Edit box.
+6. Press Tab in an open box: it saves and opens the next cell you can change. Shift+Tab goes back. Enter saves and moves the selection down one row.
+7. Sort the grid by Program and type a filter, then edit a cell: the right step changes (check it in [List] view).
+8. On a Note cell (or a Waits cell with a value) press Delete: it is cleared. Press Ctrl+D on an empty Waits cell under a row that has a wait: the wait is copied.
+9. Select a row on a Waits cell and just type `3`, then Enter: the box opens with `3` already in it and the wait becomes 3 s.
+10. While a macro plays or records, double-click a cell: no box opens.
+11. Click [List]: everything looks and works as before.
