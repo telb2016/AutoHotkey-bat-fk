@@ -233,6 +233,7 @@ VMB() {
         LastEditedStep: "", IdleHud: 0, OpenExes: 0, QuickLookGui: 0, Insp: 0, InspShown: 1, ShowMeaning: 1,
         Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map(), Shaky: Map(),
         Columns: 1, View: "grid", GridLV: 0, GridRows: [], GridNodes: Map(), GridRowOf: Map(), GridSync: false, GridSized: false,
+        GridAll: [], GridBar: Map(), SortKey: "", SortDesc: false, SortMark: "", FilterQ: "", FilterProg: "", FilterAct: "", BarSync: false, SavedFilter: 0,
         HasRun: false, History: false, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0}
     return s
 }
@@ -2608,6 +2609,7 @@ VMB_Zoom(delta) {
     s := VMB()
     s.FontSize := delta = 0 ? 9 : VF_Clamp(s.FontSize + delta, 7, 20)
     V22_ApplyTreeFont()                 ; V22: Consolas + exact indent in column mode
+    V27_ApplyGridFont()                 ; V27: the grid follows the zoom
     V22_PlaceHeader()
     IniWrite(s.FontSize, s.Ini, "Blocks", "FontSize")
     VMB_Status("Tree text size " . s.FontSize . ".")
@@ -15794,9 +15796,13 @@ V27_BuildGrid(g) {
     for col in V27_Columns()
         titles.Push(col.Title)
     s.GridLV := g.AddListView("x10 y40 w600 h300 Grid -Multi +LV0x10000 Hidden", titles)
-    s.GridLV.SetFont("s" . s.FontSize, "Segoe UI")
+    V27_ApplyGridFont()
     for i, col in V27_Columns()
         s.GridLV.ModifyCol(i, col.Width)
+    s.GridLV.OnEvent("ColClick", V27_OnColClick)
+    b := s.GridBar := Map()
+    b["Reset"] := g.AddButton("x10 y10 w84 h22 Hidden", "Step order")
+    b["Reset"].OnEvent("Click", (*) => V27_SortReset())
     s.GridLV.OnEvent("ItemSelect", V27_OnSelect)
     s.GridLV.OnEvent("DoubleClick", V27_OnDoubleClick)
     s.GridLV.OnEvent("ContextMenu", V27_OnMenu)
@@ -15812,7 +15818,10 @@ V27_PlaceGrid() {
         return
     grid := s.View = "grid"
     s.TV.GetPos(&tx, &ty, &tw, &th)
-    s.GridLV.Move(tx, ty, tw, th)
+    barH := Round(24 * A_ScreenDPI / 96)
+    gy := grid ? ty + barH + 4 : ty                ; V27 C/D/E: the filter row sits directly above the grid
+    s.GridLV.Move(tx, gy, tw, Max(40, th - (gy - ty)))
+    V27_PlaceBar(tx, ty, tw, barH, grid)
     hy := ty - 16
     if s.Ctl.Has("ColHead")
         s.Ctl["ColHead"].GetPos(, &hy)
@@ -15873,8 +15882,11 @@ V27_FillGrid(rows := "") {
     if !lv || !(s.Macro is Map)
         return
     keep := V27_SelectedNode()
-    if !IsObject(rows)
-        rows := V27_Rows(s.Macro["blocks"], s.Macro["settings"], V27_State())
+    if !IsObject(rows) {
+        s.GridAll := V27_Rows(s.Macro["blocks"], s.Macro["settings"], V27_State())
+        V27_BarLists()
+        rows := V27_ViewRows()          ; sort / filter are only a view: the rows are the same, in another order or fewer
+    }
     cols := V27_Columns()
     s.GridRows := rows, s.GridNodes := Map(), s.GridRowOf := Map()
     s.GridSync := true
@@ -15902,6 +15914,7 @@ V27_FillGrid(rows := "") {
     }
     lv.Opt("+Redraw")
     s.GridSync := false
+    V27_SortMarks()
     V27_ShowNode(keep, false)
 }
 
@@ -15947,6 +15960,183 @@ V27_OnMenu(lv, row, isRight, x, y) {
         s.TV.Modify(s.NodeItem[node], "Select")
         VMB_TreeMenu(s.TV, s.NodeItem[node], isRight, x, y)
     }
+}
+
+; ----------------------------------------------------------------------------
+; V27 item C: sort (a view only: the macro and the step numbers never change)
+; ----------------------------------------------------------------------------
+
+; @summary Sets the grid's font like the tree's (Segoe UI at s.FontSize; "MS Shell Dlg 2" first, so a missing
+;          Segoe UI keeps a normal-size font instead of the big system font). Called when built and on A+ / A- zoom.
+; @tags grid, gui, v27
+V27_ApplyGridFont() {
+    s := VMB()
+    if !s.GridLV
+        return
+    s.GridLV.SetFont("s" . s.FontSize, "MS Shell Dlg 2")
+    s.GridLV.SetFont(, "Segoe UI")
+}
+
+; @summary Compares two rows for V27_SortRows: -1, 0 or 1. A cell that is "–" (or empty, or not a number in a number
+;          column) always sorts last, also when descending.
+; @returns Integer
+; @tags grid, sort, v27
+V27_CmpRows(rowA, rowB, key, desc, isNum) {
+    va := String(rowA.Get(key, "–")), vb := String(rowB.Get(key, "–"))
+    na := 0, nb := 0
+    if isNum {
+        missA := !RegExMatch(va, "^\s*(-?\d+(?:\.\d+)?)", &ma), missB := !RegExMatch(vb, "^\s*(-?\d+(?:\.\d+)?)", &mb)
+        if !missA && !missB
+            na := Number(ma[1]), nb := Number(mb[1])
+    } else {
+        missA := va = "" || va = "–", missB := vb = "" || vb = "–"
+    }
+    if missA && missB
+        return 0
+    if missA
+        return 1
+    if missB
+        return -1
+    c := isNum ? (na < nb ? -1 : na > nb ? 1 : 0) : StrCompare(va, vb, false)
+    return desc ? -c : c
+}
+
+; @summary Sorts a row array by one cell key and returns a NEW array (the input is not changed). Stable (equal keys keep
+;          their order), numbers as numbers when isNum, "–" always last, desc = largest / Z first.
+; @returns Array of rows
+; @tags grid, sort, v27
+V27_SortRows(rows, key, desc, isNum) {
+    src := []
+    for r in rows
+        src.Push(r)
+    n := src.Length, width := 1
+    while width < n {
+        dst := []
+        i := 1
+        while i <= n {
+            mid := Min(i + width, n + 1), hi := Min(i + 2 * width, n + 1)
+            a := i, b := mid
+            while a < mid || b < hi {
+                if b >= hi || (a < mid && V27_CmpRows(src[a], src[b], key, desc, isNum) <= 0)
+                    dst.Push(src[a]), a += 1
+                else
+                    dst.Push(src[b]), b += 1
+            }
+            i += 2 * width
+        }
+        src := dst, width *= 2
+    }
+    return src
+}
+
+; @summary The rows the grid shows now: all steps in step order, narrowed by the filter, then sorted.
+; @returns Array of rows
+; @tags grid, sort, filter, v27
+V27_ViewRows() {
+    s := VMB()
+    rows := s.GridAll
+    if s.SortKey != "" {
+        for col in V27_Columns()
+            if col.Key = s.SortKey
+                return V27_SortRows(rows, col.Key, s.SortDesc, col.Num)
+    }
+    return rows
+}
+
+; @summary Puts a small up / down triangle on the sorted column's title (and takes it off the others).
+; @tags grid, sort, gui, v27
+V27_SortMarks() {
+    s := VMB()
+    mark := s.SortKey . "|" . s.SortDesc
+    if !s.GridLV || mark = s.SortMark
+        return
+    s.SortMark := mark
+    for i, col in V27_Columns()
+        s.GridLV.ModifyCol(i, "", col.Title . (col.Key = s.SortKey ? (s.SortDesc ? " ▼" : " ▲") : ""))
+}
+
+; @summary Status line for the grid view: how many rows are shown and how they are sorted (a view only).
+; @tags grid, sort, v27
+V27_ViewStatus() {
+    s := VMB()
+    parts := []
+    if s.GridRows.Length != s.GridAll.Length
+        parts.Push("Showing " . s.GridRows.Length . " of " . s.GridAll.Length . " steps")
+    if s.SortKey != "" {
+        for col in V27_Columns()
+            if col.Key = s.SortKey
+                parts.Push("Sorted by " . col.Title . " - this is only a view; steps still run in # order.")
+    }
+    VMB_Status(parts.Length ? V4_Join(parts, "  ") : "Grid view: all " . s.GridAll.Length . " steps, in step order.")
+}
+
+; @summary Shows the rows again after the sort or filter changed (no rebuild of the row data) and says what is shown.
+; @tags grid, sort, v27
+V27_Refill() {
+    s := VMB()
+    if !s.GridLV || !(s.Macro is Map)
+        return
+    V27_FillGrid(V27_ViewRows())
+    V27_ViewStatus()
+}
+
+; @summary Clicked a column title: sort by it (ascending), again = descending. The "#" title = back to step order.
+; @tags grid, sort, v27
+V27_OnColClick(lv, col) {
+    s := VMB()
+    cols := V27_Columns()
+    if col < 1 || col > cols.Length
+        return
+    key := cols[col].Key
+    if key = "num"
+        return V27_SortReset()
+    s.SortDesc := s.SortKey = key ? !s.SortDesc : false
+    s.SortKey := key
+    V27_Refill()
+}
+
+; @summary "Step order" button: back to the macro's own order (the filter stays).
+; @tags grid, sort, v27
+V27_SortReset() {
+    s := VMB()
+    s.SortKey := "", s.SortDesc := false
+    V27_Refill()
+}
+
+; @summary Places the filter row (s.GridBar controls) directly above the grid and shows it only in grid view.
+; @tags grid, gui, v27
+V27_PlaceBar(x, y, w, h, show) {
+    s := VMB()
+    b := s.GridBar
+    if !(b is Map) || !b.Has("Reset")
+        return
+    fixed := Map("Prog", 120, "Act", 104, "Clear", 54, "Reset", 84, "Copy", 84)
+    total := 0
+    for name in ["Prog", "Act", "Clear", "Reset", "Copy"]
+        if b.Has(name)
+            total += fixed[name] + 4
+    cx := x
+    if b.Has("Filter") {
+        fw := Max(80, w - total)
+        b["Filter"].Move(cx, y, fw, h)
+        cx += fw + 4
+    }
+    for name in ["Prog", "Act", "Clear", "Reset", "Copy"] {
+        if !b.Has(name)
+            continue
+        if name = "Prog" || name = "Act"
+            b[name].Move(cx, y, fixed[name])
+        else
+            b[name].Move(cx, y, fixed[name], h)
+        cx += fixed[name] + 4
+    }
+    for name, ctl in b
+        ctl.Visible := show
+}
+
+; @summary Fills the Program / Action drop-downs from the rows (item D). Nothing here yet.
+; @tags grid, filter, v27
+V27_BarLists() {
 }
 
 ; ============================================================================
@@ -17185,6 +17375,32 @@ V4_SelfTest(path) {
         v27S2.GridRows := [], v27S2.GridNodes := Map(), v27S2.GridRowOf := Map()
         v27Gui.Destroy()
         check("V27 grid: place / fill without a grid do nothing", V27_PlaceGrid() . V27_FillGrid(), "")
+        ; V27 item C: sort
+        v27R := [Map("num", 1, "app", "notepad", "x", "100"), Map("num", 2, "app", "chrome", "x", "–"), Map("num", 4, "app", "notepad", "x", "9"),
+            Map("num", 5, "app", "–", "x", "20"), Map("num", 10, "app", "chrome", "x", "3")]
+        v27Out := ""
+        for v27Row in V27_SortRows(v27R, "x", false, true)
+            v27Out .= v27Row["num"] . ","
+        check("V27 sort: numbers as numbers, dash last", v27Out, "10,4,5,1,2,")
+        v27Out := ""
+        for v27Row in V27_SortRows(v27R, "x", true, true)
+            v27Out .= v27Row["num"] . ","
+        check("V27 sort: numbers descending, dash still last", v27Out, "1,5,4,10,2,")
+        v27Out := ""
+        for v27Row in V27_SortRows(v27R, "app", false, false)
+            v27Out .= v27Row["num"] . ","
+        check("V27 sort: text ascending, stable for equal keys, dash last", v27Out, "2,10,1,4,5,")
+        v27Out := ""
+        for v27Row in V27_SortRows(v27R, "app", true, false)
+            v27Out .= v27Row["num"] . ","
+        check("V27 sort: text descending, stable, dash last", v27Out, "1,4,2,10,5,")
+        v27Out := ""
+        for v27Row in V27_SortRows(v27R, "num", false, true)
+            v27Out .= v27Row["num"] . ","
+        check("V27 sort: skipped step numbers (1,2,4,5,10) sort as numbers, not as text", v27Out, "1,2,4,5,10,")
+        check("V27 sort: input array untouched", v27R[1]["num"] . v27R.Length, "15")
+        check("V27 sort: empty and one row", V27_SortRows([], "x", false, true).Length . V27_SortRows([v27R[1]], "x", true, true).Length, "01")
+        check("V27 sort: text compare ignores case", V27_SortRows([Map("app", "b"), Map("app", "A")], "app", false, false)[1]["app"], "A")
         ; V27 check this PC (scroll test in a helper program)
         check("V27 helper: has a list box and a multi-line text box", InStr(V27_ScrollHelperText(), "ListBox") > 0 && InStr(V27_ScrollHelperText(), "Multi") > 0, true)
         check("V27 helper: 300 rows and 300 lines", InStr(V27_ScrollHelperText(), "loop 300") > 0, true)
