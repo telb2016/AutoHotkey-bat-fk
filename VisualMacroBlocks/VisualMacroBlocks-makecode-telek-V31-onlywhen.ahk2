@@ -293,7 +293,7 @@ VMB() {
         GridZoom: 100, GridColW: Map(), GridColApplied: Map(), GridHidden: Map(), GridOrderKeys: [], ColsSaved: "", CurCell: "",
         HasRun: false, History: false, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0,
         Sheet: "steps", PreviewRow: 1, RunBar: Map(), SheetTabs: Map(), ListBar: Map(), ListLV: 0, ListUndo: [], ListRedo: [], ListResult: Map(),
-        GridMark: Map(), ListEditOn: false, ListEditRow: 0, ListEditLvRow: 0, ListEditCol: 3, ListEditOrig: "", ListCol: 3}
+        GridMark: Map(), RuleDlg: 0, ListEditOn: false, ListEditRow: 0, ListEditLvRow: 0, ListEditCol: 3, ListEditOrig: "", ListCol: 3}
     return s
 }
 
@@ -2394,6 +2394,8 @@ VMB_TreeMenu(ctl, item, isRightClick, x, y) {
     if item
         ctl.Modify(item, "Select")
     m := Menu()
+    m.Add("Add step", V31_AddMenu())                ; V31: Type text, Press keys, Wait, Wait until window, Skip this row, Stop the run
+    m.Add()
     m.Add("⚡ Make this step vary (Auto-Loop)...`tCtrl+L", V8_VarySelectedDialog)
     m.Add("🧭 Deterministic Inspector & Layout Physics Lab...`tCtrl+Shift+D", V10_ShowDeterministicLab)
     varyQuick := Menu()
@@ -10815,6 +10817,17 @@ V10_DetDefs() {
         ],
         Desc: "Clicks field, runs 3-stage Citrix-proof clear (2x End+Shift+Home+Delete + Backspace sweep so dropped modifiers never leave text), types, and Tabs."
     }
+    defs["det_wait_window"] := {                                  ; V31: Wait until window ... is open / closed
+        Label: "Wait Until Window Is Open / Closed",
+        Group: "V10 Deterministic (No OCR)",
+        Defaults: Map("target", "", "timeoutSec", 10, "closed", 0),
+        Fields: [
+            ["target", "Part of the window title (any program)", "text"],
+            ["timeoutSec", "Fails after this many seconds (then 'If it fails' decides what happens)", "number"],
+            ["closed", "Wait until the window is CLOSED instead of open", "check"]
+        ],
+        Desc: "Waits until a window whose title contains the text is open (or closed). If it takes longer than the seconds given, the step fails."
+    }
     defs["det_use_window"] := {
         Label: "Use Window From Here On",
         Group: "V10 Deterministic (No OCR)",
@@ -10854,6 +10867,8 @@ V10_DetStepInfo(node) {
             return "(" . node.Get("x", 0) . ", " . node.Get("y", 0) . ") := " . SubStr(node.Get("value", ""), 1, 40)
         case "det_use_window":
             return node.Get("target", "") = "" ? "(back to Macro window)" : node["target"]
+        case "det_wait_window":
+            return V31_WaitText(node)
     }
     return ""
 }
@@ -11243,6 +11258,8 @@ V10_DetExecute(node, ctx) {
     t := node["type"]
     if t = "det_use_window"
         return V16_UseWindow(node, ctx)
+    if t = "det_wait_window"
+        return V31_WaitWindow(node, ctx)
     hwnd := V10_ResolveWindow(node, ctx)
     WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . hwnd)
     switch t {
@@ -11341,6 +11358,8 @@ V10_DetPreview(node, runner) {
             return {Text: "Next steps go back to the Macro window: " . V4_Text(runner.Settings.Get("defaultTarget", "(active window)")), Ok: true}
         return {Text: "Next steps will use " . want . (WinExist(want) ? " (open now)." : " (not open yet - will wait " . node.Get("waitSec", 10) . " s)."), Ok: true}
     }
+    if t = "det_wait_window"
+        return {Text: "Will wait until " . V31_WaitText(node) . (V31_WindowOpen(runner.Expand(node.Get("target", ""))) ? " (a window like that is open now)." : " (no window like that is open now)."), Ok: true}
     try {
         hwnd := V10_ResolveWindow(node, runner)
         WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . hwnd)
@@ -14483,6 +14502,8 @@ V21_MoreSentence(node) {
             return "Hold " . node.Get("key", "Ctrl") . " down"
         case "input_keyup":
             return "Let go of " . node.Get("key", "Ctrl")
+        case "det_wait_window":
+            return "Wait until " . V31_WaitText(node)
         case "det_wait_settled":
             return "Wait until the area (" . node.Get("x1", 0) . ", " . node.Get("y1", 0) . ")–(" . node.Get("x2", 0) . ", "
                 . node.Get("y2", 0) . ") stops changing"
@@ -15850,6 +15871,10 @@ V27_ActionText(node) {
         case "keys": return "Press"
         case "delay", "wait": return "Wait"
         case "det_use_window", "det_normalize_win": return "Window"
+        case "det_wait_window": return "Wait"
+        case "stop":
+            a := node.Get("action", "break")
+            return a = "continue" ? "Skip this row" : a = "endrun" ? "Stop the run" : "Other"
     }
     if SubStr(t, 1, 4) = "web_"
         return "Web"
@@ -15882,6 +15907,8 @@ V27_TextText(node) {
         return V20_KeysText(node.Get("keys", ""))
     if t = "wheel"
         return StrLower(RegExReplace(node.Get("direction", "WheelDown"), "i)^Wheel")) . " × " . Integer(node.Get("count", 1))
+    if t = "det_wait_window"
+        return V31_WaitText(node)
     return ""
 }
 
@@ -16246,6 +16273,8 @@ V27_OnMenu(lv, row, isRight, x, y) {
     s := VMB()
     if V29_OnHeader(x, y)                          ; V29: right-click on the column heading = hide / show columns
         return V29_ColMenu(x, y)
+    if row && V31_CellMenu(row, x, y)              ; V31: the Only when cell has its own menu (build a rule, otherwise, always)
+        return
     if row && V30_TextMenu(row, x, y)              ; V30: the Text cell of a Type step has its own small menu
         return
     node := row ? s.GridNodes.Get(row, 0) : 0
@@ -16712,7 +16741,7 @@ V28_Editable(node, key) {
     geo := node.Get("geo", "")
     switch key {
         case "text":
-            return (t = "text" && !V4_Bool(node.Get("ask", 0))) || t = "keys" || t = "wheel" ? "text" : ""
+            return (t = "text" && !V4_Bool(node.Get("ask", 0))) || t = "keys" || t = "wheel" || t = "det_wait_window" ? "text" : ""
         case "button":
             return mouse ? ["Left", "Right", "Middle"] : ""
         case "clicks":
@@ -16807,6 +16836,8 @@ V28_EditText(node, key) {
                 return V30_ShownNow(node.Get("text", ""))           ; V30: {{Name}} is shown as =Name when the macro has a list
             if t = "keys"
                 return node.Get("keys", "")
+            if t = "det_wait_window"
+                return V31_WaitText(node)
             return StrLower(RegExReplace(node.Get("direction", "WheelDown"), "i)^Wheel")) . " " . Integer(node.Get("count", 1))
         case "button":
             return node.Get("button", "Left")
@@ -16861,6 +16892,8 @@ V28_Hint(node, key) {
                 return "Raw keys, for example ^{a} or {Enter}{Tab}."
             if t = "wheel"
                 return "Scroll: up, down, left or right, then how many, for example down 3."
+            if t = "det_wait_window"
+                return "Wait until: Save As is open  (or  is closed), then optionally  within 10 s."
             return V30_Gate() ? "The text that is typed. =Name types the list column Name, =# the round number, '=x types a text that starts with =." : "The text that is typed."
     }
     return "Pick one."
@@ -16920,6 +16953,10 @@ V28_Plan(node, key, input) {
             if t = "keys" {
                 bad := V28_KeysError(String(input))
                 return bad != "" ? no(bad) : yes([set(["keys"], String(input))])
+            }
+            if t = "det_wait_window" {
+                ww := V31_ParseWaitWindow(String(input), node.Get("timeoutSec", 10))
+                return ww.Ok ? yes([set(["target"], ww.Title), set(["closed"], ww.Closed ? 1 : 0), set(["timeoutSec"], ww.Secs)]) : no(ww.Error)
             }
             if !RegExMatch(StrLower(text), "^(up|down|left|right)(?:\s*(?:x|×)?\s*(\d+))?$", &m)
                 return no("Write the scroll like: down 3 (up, down, left or right, then how many).")
@@ -20377,6 +20414,183 @@ V31_Clearable(key) => key = "note" || key = "wait" || key = "when" || key = "fai
 ; @tags grid, v31
 V31_ClearKey(key) => key = "note" ? "note" : key = "wait" ? "delayMs" : key = "when" ? "when" : "onFailStep"
 
+; ----------------------------------------------------------------------------
+; V31 item E: Skip this row / Stop the run / Wait until window, and the "Add step" menu
+; ----------------------------------------------------------------------------
+
+; @summary The text of a Wait until window step: "Save As is open (within 10 s)" / "is closed".
+; @returns String
+; @tags wait, window, v31
+V31_WaitText(node) {
+    t := Trim(String(node.Get("target", "")))
+    secs := node.Get("timeoutSec", 10)
+    return (t = "" ? "(a window title)" : t) . (V4_Bool(node.Get("closed", 0)) ? " is closed" : " is open") . " (within " . secs . " s)"
+}
+
+; @summary Reads what a person types into the Text cell of a Wait until window step: "Save As", "Save As is open", "Save As is closed",
+;          each optionally followed by "within 10 s" / "(10 s)". Returns {Ok, Error, Title, Closed, Secs}; without a number of seconds
+;          defaultSecs is kept.
+; @returns {Ok, Error, Title, Closed, Secs}
+; @tags wait, window, v31
+V31_ParseWaitWindow(text, defaultSecs := 10) {
+    t := Trim(String(text)), secs := defaultSecs, closed := false
+    if RegExMatch(t, "i)\s*\(?\s*(?:within\s+)?(\d+(?:\.\d+)?)\s*s(?:ec(?:onds?)?)?\s*\)?\s*$", &m) {
+        secs := Number(m[1]), t := Trim(SubStr(t, 1, m.Pos - 1))
+        if secs < 1 || secs > 3600
+            return {Ok: false, Error: "The seconds must be from 1 to 3600.", Title: "", Closed: false, Secs: defaultSecs}
+    }
+    if RegExMatch(t, "i)\s+is\s+(open|closed)$", &m2) {
+        closed := StrLower(m2[1]) = "closed"
+        t := Trim(SubStr(t, 1, m2.Pos - 1))
+    }
+    t := V31_Unquote(t)
+    if t = ""
+        return {Ok: false, Error: "Write part of the window title, for example  Save As is open.", Title: "", Closed: false, Secs: defaultSecs}
+    return {Ok: true, Error: "", Title: t, Closed: closed, Secs: secs}
+}
+
+; @summary Runs a Wait until window step: waits until a window whose title contains the text is open (or closed). Fails after the
+;          seconds given - then the step's "If it fails" choice (or the macro's setting) applies.
+; @tags wait, window, play, v31
+V31_WaitWindow(node, ctx) {
+    title := Trim(ctx.Expand(node.Get("target", "")))
+    if title = ""
+        throw Error("Wait until window: write part of the window title first.")
+    wantOpen := !V4_Bool(node.Get("closed", 0))
+    secs := Number(node.Get("timeoutSec", 10))
+    deadline := A_TickCount + Max(0, secs) * 1000
+    loop {
+        if (V31_WindowOpen(title) ? true : false) = wantOpen
+            return
+        if A_TickCount >= deadline
+            throw Error("Wait until window: '" . title . "' did not " . (wantOpen ? "open" : "close") . " within " . secs . " s.")
+        ctx.Sleep(100)
+    }
+}
+
+; @summary The steps the "Add step" menu offers, as [menu text, kind]. They are put in below the current row.
+; @returns Array
+; @tags steps, menu, v31
+V31_StepKinds() => [["Type text", "text"], ["Press keys", "keys"], ["Wait (seconds)", "delay"], ["Wait until window...", "waitwin"],
+    ["Skip this row", "skiprow"], ["Stop the run", "stoprun"]]
+
+; @summary A new step of one of the kinds of V31_StepKinds, with plain starting values (nothing to answer: change it in its cells).
+;          Skip this row = a Flow control step that goes on with the next row (continue); Stop the run = one that ends everything (endrun).
+; @returns Map ("" for an unknown kind)
+; @tags steps, menu, v31
+V31_NewStep(kind) {
+    switch kind {
+        case "text": return Map("type", "text", "text", "text")
+        case "keys": return Map("type", "keys", "keys", "{Enter}")
+        case "delay": return Map("type", "delay", "ms", 1000)
+        case "waitwin": return V4_CreateNode("det_wait_window")
+        case "skiprow": return Map("type", "stop", "action", "continue")
+        case "stoprun": return Map("type", "stop", "action", "endrun")
+    }
+    return ""
+}
+
+; @summary "Add step" menu action: puts a new step below the current row (or inside the selected block).
+; @tags steps, menu, gui, v31
+V31_AddStep(kind, *) {
+    if VM_IsRecording() || VM_IsPlaying()
+        return
+    node := V31_NewStep(kind)
+    if !IsObject(node)
+        return
+    where := VMB_InsertPoint()
+    VMB_InsertNode(node, where.List, where.Index)
+    VMB_Status("Step added below. Change it in its cells (double-click). Ctrl+Z undoes it.")
+}
+
+; @summary The "Add step" sub-menu (for the right-click menu of the grid and the list).
+; @tags steps, menu, gui, v31
+V31_AddMenu() {
+    sub := Menu()
+    for item in V31_StepKinds()
+        sub.Add(item[1], V31_AddStep.Bind(item[2]))
+    return sub
+}
+
+; @summary Sets (or clears) the Only when rule of a step through the same checks as the cell editor, with undo. Returns true when it was set.
+; @tags rules, gui, v31
+V31_SetWhen(node, text) {
+    if VM_IsRecording() || VM_IsPlaying() || !(node is Map)
+        return false
+    plan := V28_Plan(node, "when", text)
+    if !plan.Ok {
+        VMB_Status(plan.Error)
+        return false
+    }
+    V28_Do(node, plan, "Only when changed. Ctrl+Z undoes it.")
+    return true
+}
+
+; @summary What the rule builder's OK does: puts the three choices together (with "otherwise, " in front when asked) and sets the rule.
+;          Returns true when the rule was accepted.
+; @tags rules, builder, gui, v31
+V31_BuilderApply(node, name, op, value, other) {
+    text := V31_BuildRuleText(name, op, value)
+    if other
+        text := "otherwise, " . text
+    return V31_SetWhen(node, text)
+}
+
+; @summary The small window for people who do not want to type rules: pick the name, pick the comparison, type the value.
+; @tags rules, builder, gui, v31
+V31_RuleBuilder(node, other := false) {
+    s := VMB()
+    if VM_IsRecording() || VM_IsPlaying() || !s.Gui
+        return
+    g := Gui("+Owner" . s.Gui.Hwnd . " +ToolWindow", "Only when - build a rule")
+    g.SetFont("s9", "Segoe UI")
+    g.AddText("xm w480", "Do this step only when:")
+    names := V31_NamesNow()
+    nm := g.AddDropDownList("xm w170", names)
+    nm.Choose(names.Length > 1 ? 2 : 1)
+    op := g.AddDropDownList("x+6 w150", V31_BuilderOps())
+    op.Choose(1)
+    val := g.AddEdit("x+6 w140")
+    oth := g.AddCheckbox("xm y+10", "otherwise: only when the step above (with a rule) did not run")
+    oth.Value := other ? 1 : 0
+    g.AddText("xm y+4 w480", "For a window rule pick 'window is open' and type part of the title as the value.")
+    ok := g.AddButton("xm y+10 w90 Default", "OK")
+    ca := g.AddButton("x+6 w90", "Cancel")
+    ok.OnEvent("Click", (*) => (V31_BuilderApply(node, nm.Text, op.Text, val.Value, oth.Value) ? g.Destroy() : 0))
+    ca.OnEvent("Click", (*) => g.Destroy())
+    g.OnEvent("Escape", (*) => g.Destroy())
+    g.Show()
+    s.RuleDlg := g
+}
+
+; @summary Right-click on an Only when cell: build a rule, otherwise, always. Returns true when it handled the click.
+; @tags rules, menu, gui, v31
+V31_CellMenu(row, x, y) {
+    s := VMB()
+    node := s.GridNodes.Get(row, 0)
+    hit := V28_HitCell()
+    cols := V27_Columns()
+    if !IsObject(node) || hit.Row != row || hit.Col < 1 || hit.Col > cols.Length || cols[hit.Col].Key != "when" || !V31_HasRuleCells(node)
+        return false
+    s.GridSync := true
+    s.GridLV.Modify(row, "Select Focus")
+    s.GridSync := false
+    if s.NodeItem.Has(node)
+        s.TV.Modify(s.NodeItem[node], "Select")
+    s.GridCol := hit.Col
+    m := Menu()
+    m.Add("Build a rule...", (*) => V31_RuleBuilder(node, false))
+    m.Add("otherwise, build a rule...", (*) => V31_RuleBuilder(node, true))
+    m.Add("otherwise (everything else)", (*) => V31_SetWhen(node, "otherwise"))
+    m.Add("always (no rule)", (*) => V31_SetWhen(node, ""))
+    m.Add()
+    m.Add("Type a rule...", (*) => V28_Open(row, hit.Col))
+    item := s.NodeItem.Has(node) ? s.NodeItem[node] : 0
+    m.Add("Other step actions...", (*) => item ? VMB_TreeMenu(s.TV, item, true, x, y) : 0)
+    m.Show()
+    return true
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -20769,7 +20983,7 @@ V4_SelfTest(path) {
             bList.Length = 1 && bList[1]["type"] = "for" && bList[1]["to"] = 12 && bList[1]["name"] = "rowIdx")
         check("V8 summary badge describes pixel variation", InStr(V8_VarySummaryBadge(vStep), "+25px Y") > 0)
         ; V10 Classical Non-OCR / Non-Image Deterministic Engine checks
-        check("V10 deterministic block definitions", V10_DetDefs().Count, 9)
+        check("V10 deterministic block definitions (V31 added Wait until window)", V10_DetDefs().Count, 10)
         ancPt := V10_CalcAnchorPoint(693, 803, "BottomCenter", -41, -60, 50, 50, 100, 50)
         check("V10 BottomCenter anchor math (693x803, dx=-41, dy=-60 -> 305, 743)",
             ancPt.WinX . "," . ancPt.WinY . "|" . ancPt.ScreenX . "," . ancPt.ScreenY, "305,743|405,793")
@@ -22202,6 +22416,32 @@ V4_SelfTest(path) {
         check("V31 macro vars: Set / For / Change names are known to rules", V4_Join(V31_MacroVars([Map("type", "set", "name", "a"), Map("type", "repeat", "body", [Map("type", "change", "name", "b")])]), ","), "a,b")
         check("V31 builder: rule text from name / comparison / value", V31_BuildRuleText("Status", "=", "On") . "|" . V31_BuildRuleText("Name", "is empty", "") . "|" . V31_BuildRuleText("Name", "contains", "a and b") . "|" . V31_BuildRuleText("", "window is open", "Save As"), "Status = On|Name is empty|Name contains `"a and b`"|window Save As is open")
         check("V31 builder: what it builds reads back as a rule", V31_ParseRule(V31_BuildRuleText("Name", "contains", "a and b"), ["Name"]).Ok . V31_ParseRule(V31_BuildRuleText("Name", "is not empty", ""), ["Name"]).Ok . V31_ParseRule(V31_BuildRuleText("", "window is not open", "Save As"), ["Name"]).Ok, "111")
+
+        ; ---- V31 item E: Skip this row / Stop the run / Wait until window / Add step ----
+        v31Ww := V31_ParseWaitWindow("Save As")
+        check("V31 wait window text: title alone = open, 10 s kept", v31Ww.Ok . "|" . v31Ww.Title . "|" . v31Ww.Closed . "|" . v31Ww.Secs, "1|Save As|0|10")
+        v31Ww := V31_ParseWaitWindow("Save As is closed within 5 s")
+        check("V31 wait window text: is closed + within 5 s", v31Ww.Ok . "|" . v31Ww.Title . "|" . v31Ww.Closed . "|" . v31Ww.Secs, "1|Save As|1|5")
+        v31Ww := V31_ParseWaitWindow("`"Save As`" is open (20 s)", 3)
+        check("V31 wait window text: quotes and (20 s)", v31Ww.Ok . "|" . v31Ww.Title . "|" . v31Ww.Closed . "|" . v31Ww.Secs, "1|Save As|0|20")
+        check("V31 wait window text: empty title and silly seconds are refused with a sentence", V31_ParseWaitWindow("").Ok . V31_ParseWaitWindow("x within 9999 s").Ok, "00")
+        v31Wn := V4_CreateNode("det_wait_window")
+        check("V31 wait window node: defaults, text, grid cells (Action Wait, Text shows it)", v31Wn["timeoutSec"] . "|" . V31_WaitText(v31Wn) . "|" . V27_ActionText(v31Wn) . "|" . V27_Cells(v31Wn, Map())["action"], "10|(a window title) is open (within 10 s)|Wait|Wait")
+        v31W := V28_ApplyCell(v31Wn, "text", "Save As is closed within 7 s")
+        check("V31 wait window cell: the Text cell sets title, closed and seconds", v31W.Ok . "|" . v31Wn["target"] . "|" . v31Wn["closed"] . "|" . v31Wn["timeoutSec"] . "|" . V28_EditText(v31Wn, "text"), "1|Save As|1|7|Save As is closed (within 7 s)")
+        check("V31 wait window node passes VM_Validate and has a plain line in the step list", VM_Validate(Map("blocks", [v31Wn])).Length . "|" . V20_StepLine(v31Wn), "0|Wait until Save As is closed (within 7 s)")
+        v31Wn["target"] := "zz-no-such-window-zz", v31Wn["closed"] := 0, v31Wn["timeoutSec"] := 1
+        rejects("V31 wait window: a window that never opens fails after the seconds (with a plain sentence)", () => V31_WaitWindow(v31Wn, V4Runner(VMF_NewMacro(), {})))
+        v31Wn["closed"] := 1
+        v31Wt := A_TickCount
+        V31_WaitWindow(v31Wn, V4Runner(VMF_NewMacro(), {}))
+        check("V31 wait window: waiting for a window to be closed that is not open is over at once", (A_TickCount - v31Wt) < 800, 1)
+        check("V31 steps: Skip this row = Flow control continue, Stop the run = endrun; both validate and show plain Action words", V31_NewStep("skiprow")["action"] . "|" . V31_NewStep("stoprun")["action"] . "|" . V27_ActionText(V31_NewStep("skiprow")) . "|" . V27_ActionText(V31_NewStep("stoprun")) . "|" . V27_ActionText(Map("type", "stop", "action", "break")) . "|" . VM_Validate(Map("blocks", [V31_NewStep("skiprow"), V31_NewStep("stoprun")])).Length, "continue|endrun|Skip this row|Stop the run|Other|0")
+        v31Bad := 0
+        for v31Kd in V31_StepKinds()
+            v31Bad += V31_NewStep(v31Kd[2]) is Map ? 0 : 1
+        check("V31 add step: every kind of the menu makes a step, an unknown kind does not", v31Bad . "|" . V31_StepKinds().Length . "|" . (V31_NewStep("zzz") = ""), "0|6|1")
+        check("V31 add step: the new steps validate", VM_Validate(Map("blocks", [V31_NewStep("text"), V31_NewStep("keys"), V31_NewStep("delay"), V31_NewStep("waitwin")])).Length, 0)
 
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
