@@ -16170,7 +16170,7 @@ V27_BuildGrid(g) {
     c["ViewGrid"].OnEvent("Click", (*) => V27_SetView("grid"))
     titles := []
     for col in V27_Columns()
-        titles.Push(col.Title)
+        titles.Push(V32_HeadTitle(col.Title, "", false))         ; V32: every title has the filter arrow
     s.GridLV := g.AddListView("x10 y40 w600 h300 Grid -Multi +LV0x10000 +LV0x10 Hidden", titles)    ; V29: +LV0x10 = columns can be dragged to reorder
     s.GridZoom := V29_ClampZoom(IniRead(s.Ini, "V29", "GridZoom", 100))
     V29_LoadCols()
@@ -16290,6 +16290,7 @@ V27_FillGrid(rows := "") {
     if !lv || !(s.Macro is Map)
         return
     V28_Cancel(false)                   ; V28: the rows change under the editor
+    V32_ClosePopup()                    ; V32: so does an open header filter list
     keep := V27_SelectedNode()
     if !IsObject(rows) {
         s.GridAll := V27_Rows(s.Macro["blocks"], s.Macro["settings"], V27_State())
@@ -16476,6 +16477,8 @@ V27_ViewRows() {
         rows := V27_PickRows(rows, "action", s.FilterAct)
     if Trim(s.FilterQ) != ""
         rows := V27_FilterRows(rows, s.FilterQ, V27_Columns())
+    if s.Picks.Count
+        rows := V32_ApplyPicks(rows, s.Picks)                   ; V32: the picks of the header arrows (columns ANDed)
     if s.SortKey != "" {
         for col in V27_Columns()
             if col.Key = s.SortKey
@@ -16488,12 +16491,12 @@ V27_ViewRows() {
 ; @tags grid, sort, gui, v27
 V27_SortMarks() {
     s := VMB()
-    mark := s.SortKey . "|" . s.SortDesc
+    mark := s.SortKey . "|" . s.SortDesc . "|" . V32_PickSig(s.Picks)
     if !s.GridLV || mark = s.SortMark
         return
     s.SortMark := mark
     for i, col in V27_Columns()
-        s.GridLV.ModifyCol(i, "", col.Title . (col.Key = s.SortKey ? (s.SortDesc ? " ▼" : " ▲") : ""))
+        s.GridLV.ModifyCol(i, "", V32_HeadTitle(col.Title, col.Key = s.SortKey ? (s.SortDesc ? " ▼" : " ▲") : "", s.Picks.Has(col.Key)))
 }
 
 ; @summary Status line for the grid view: how many rows are shown and how they are sorted (a view only).
@@ -16503,6 +16506,13 @@ V27_ViewStatus() {
     parts := []
     if s.GridRows.Length != s.GridAll.Length
         parts.Push("Showing " . s.GridRows.Length . " of " . s.GridAll.Length . " steps")
+    if s.Picks.Count {
+        titles := []
+        for col in V27_Columns()
+            if s.Picks.Has(col.Key)
+                titles.Push(col.Title)
+        parts.Push("Header filter on " . V4_Join(titles, ", ") . " (▼=)")
+    }
     if s.SortKey != "" {
         for col in V27_Columns()
             if col.Key = s.SortKey
@@ -16529,6 +16539,8 @@ V27_OnColClick(lv, col) {
     if col < 1 || col > cols.Length
         return
     key := cols[col].Key
+    if V32_HeaderClick(col)                        ; V32: a click on the arrow part of the title opens the filter popup instead of sorting
+        return
     if key = "num"
         return V27_SortReset()
     s.SortDesc := s.SortKey = key ? !s.SortDesc : false
@@ -16669,7 +16681,7 @@ V27_Distinct(rows, key) {
 ; @tags grid, filter, v27
 V27_FilterOn() {
     s := VMB()
-    return Trim(s.FilterQ) != "" || s.FilterProg != "" || s.FilterAct != ""
+    return Trim(s.FilterQ) != "" || s.FilterProg != "" || s.FilterAct != "" || s.Picks.Count > 0
 }
 
 ; @summary Fills the Program / Action drop-downs from the current rows (All + each one). A choice that is no longer
@@ -16728,7 +16740,7 @@ V27_OnPick(ctl, *) {
 ; @tags grid, filter, v27
 V27_ClearFilter(refill := true) {
     s := VMB()
-    s.FilterQ := "", s.FilterProg := "", s.FilterAct := ""
+    s.FilterQ := "", s.FilterProg := "", s.FilterAct := "", s.Picks := Map()     ; V32: Clear also clears the header picks
     b := s.GridBar
     if b is Map && b.Has("Filter") {
         s.BarSync := true
@@ -16746,7 +16758,7 @@ V27_ClearFilter(refill := true) {
 V27_RunStart() {
     s := VMB()
     V28_Cancel()                    ; V28: no cell editing while a run starts
-    s.SavedFilter := V27_FilterOn() ? Map("Q", s.FilterQ, "Prog", s.FilterProg, "Act", s.FilterAct) : 0
+    s.SavedFilter := V27_FilterOn() ? Map("Q", s.FilterQ, "Prog", s.FilterProg, "Act", s.FilterAct, "Picks", s.Picks) : 0
     if !s.SavedFilter
         return
     V27_ClearFilter(false)
@@ -16762,7 +16774,7 @@ V27_RunEnd() {
     s.SavedFilter := 0
     if !(saved is Map) || !s.GridLV
         return
-    s.FilterQ := saved["Q"], s.FilterProg := saved["Prog"], s.FilterAct := saved["Act"]
+    s.FilterQ := saved["Q"], s.FilterProg := saved["Prog"], s.FilterAct := saved["Act"], s.Picks := saved["Picks"]
     b := s.GridBar
     if b is Map && b.Has("Filter") {
         s.BarSync := true
@@ -21647,7 +21659,7 @@ V32_Plain() {
 V32_RangeRows() {
     s := VMB()
     out := Map(), r := s.GridRange
-    if !IsObject(r) || !s.GridRowOf.Has(r.A) || !s.GridRowOf.Has(r.C) || !V32_Plain()
+    if !IsObject(r) || !s.GridRowOf.Has(r.A) || !s.GridRowOf.Has(r.C)
         return out
     lr := V32_Range(s.GridRowOf[r.A], s.GridRowOf[r.C], s.GridRows.Length)
     if lr[1] < 1
@@ -21872,9 +21884,9 @@ V32_Insert(kind, above := false, *) {
 ; @summary Shift+Up / Shift+Down: extends the row range by one row (the anchor stays where the range started).
 ; @tags rows, grid, v32
 V32_Extend(dir) {
-    if !V32_Guard()
-        return
     s := VMB()
+    if VM_IsRecording() || VM_IsPlaying() || s.View != "grid" || !s.GridLV || !s.GridRows.Length
+        return                                       ; (also in a sorted / filtered view: the rows are shaded, the actions say why they wait)
     r := s.GridRange
     valid := IsObject(r) && s.GridRowOf.Has(r.A) && s.GridRowOf.Has(r.C)
     curRow := valid ? s.GridRowOf[r.C] : s.GridLV.GetNext(0)
@@ -21885,14 +21897,14 @@ V32_Extend(dir) {
     s.GridRange := {A: anchor, C: s.GridNodes[newRow]}
     V32_SelectNode(s.GridNodes[newRow])
     n := V32_RangeRows().Count
-    VMB_Status(n > 1 ? n . " rows selected.  Alt+Up / Alt+Down move them, Shift+Delete deletes them, Ctrl+Shift+D duplicates them." : "1 row selected.")
+    VMB_Status(n > 1 ? n . " rows selected.  Alt+Up / Alt+Down move them, Shift+Delete deletes them, Ctrl+Shift+D duplicates them." . (V32_Plain() ? "" : "  " . V32_PlainSentence()) : "1 row selected.")
 }
 
 ; @summary A row was picked in the grid (click or arrow key): Shift+click extends the range from the row picked before, a plain pick ends it.
 ; @tags rows, grid, v32
 V32_OnPick(node) {
     s := VMB()
-    if GetKeyState("Shift") && IsObject(node) && IsObject(s.V32Last) && s.GridRowOf.Has(node) && s.GridRowOf.Has(s.V32Last) && V32_Plain() {
+    if GetKeyState("Shift") && IsObject(node) && IsObject(s.V32Last) && s.GridRowOf.Has(node) && s.GridRowOf.Has(s.V32Last) {
         r := s.GridRange
         anchor := IsObject(r) && s.GridRowOf.Has(r.A) ? r.A : s.V32Last
         s.GridRange := {A: anchor, C: node}
@@ -22198,6 +22210,292 @@ V32_FindKeys(*) => VMB().FindOn && (V32_FindEditFocused() || V27_GridFocused() |
 ; @summary True when Ctrl+F opens Find: one of the three grids (Steps, List, Values) or the Find box has the focus.
 ; @tags find, hotkey, v32
 V32_FindCanOpen(*) => V27_GridFocused() || V30_ListFocused() || V31_ValFocused() || V32_FindEditFocused()
+
+; ----------------------------------------------------------------------------
+; V32 item B: filter arrows in the column headers (Excel AutoFilter). A view only, like sort and the filter box.
+; ----------------------------------------------------------------------------
+
+; @summary The distinct cell texts of one column, as the cells show them: numbers first (as numbers, smallest first), then text
+;          (A to Z, not case sensitive), and "–" (an empty or not applicable cell) last.
+; @returns Array of Strings
+; @tags filter, grid, v32
+V32_Distinct(rows, key) {
+    seen := Map(), nums := [], texts := [], dash := false
+    for r in rows {
+        v := String(r.Get(key, ""))
+        if v = "" || v = "–" {
+            dash := true
+            continue
+        }
+        if seen.Has(v)
+            continue
+        seen[v] := 1
+        if RegExMatch(v, "^-?\d+(\.\d+)?$")
+            nums.Push(v)
+        else
+            texts.Push(v)
+    }
+    out := []
+    for v in V32_InsertSort(nums, true)
+        out.Push(v)
+    for v in V32_InsertSort(texts, false)
+        out.Push(v)
+    if dash
+        out.Push("–")
+    return out
+}
+
+; @summary Sorts an array of strings (numeric = compare as numbers, else A to Z not case sensitive). Returns a new array.
+; @returns Array
+; @tags filter, v32
+V32_InsertSort(list, numeric) {
+    out := []
+    for v in list {
+        i := out.Length
+        while i >= 1 && (numeric ? Number(out[i]) > Number(v) : StrCompare(out[i], v, false) > 0)
+            i -= 1
+        out.InsertAt(i + 1, v)
+    }
+    return out
+}
+
+; @summary The rows whose cell in every picked column is one of the picked values (columns are ANDed). picks = Map key -> Map(value -> 1).
+;          An empty or "–" cell counts as "–". No picks gives all rows. The input is not changed.
+; @returns Array of rows
+; @tags filter, grid, v32
+V32_ApplyPicks(rows, picks) {
+    out := []
+    for r in rows {
+        ok := true
+        for key, set in picks {
+            v := String(r.Get(key, ""))
+            if v = ""
+                v := "–"
+            if !set.Has(v) {
+                ok := false
+                break
+            }
+        }
+        if ok
+            out.Push(r)
+    }
+    return out
+}
+
+; @summary Is an x position (in the header's own pixels) inside the arrow part (the right arrowW pixels, at most half) of a header cell?
+; @returns Boolean
+; @tags filter, header, v32
+V32_HitArrow(x, left, right, arrowW) => right > left && x >= right - Min(arrowW, (right - left) // 2) && x < right
+
+; @summary The header text: title, the sort triangle when this column is sorted, and the filter arrow (a filtered column shows "▼=").
+; @tags filter, header, v32
+V32_HeadTitle(title, sortMark, filtered) => title . sortMark . (filtered ? " ▼=" : " ▾")
+
+; @summary A short text that changes when the header picks change (so the header titles are rewritten).
+; @tags filter, header, v32
+V32_PickSig(picks) {
+    sig := ""
+    for key, set in picks
+        sig .= key . ":" . set.Count . ","
+    return sig
+}
+
+; @summary The state of the open filter popup (kept here so it is not part of the editor object): a Map, empty when closed.
+; @returns Map
+; @tags filter, gui, v32
+V32_Pop() {
+    static p := Map()
+    return p
+}
+
+; @summary Is the mouse in the arrow part of this column's header cell right now (used by the header click)?
+; @returns Boolean
+; @tags filter, header, v32
+V32_HeaderHit(col) {
+    s := VMB()
+    hdr := SendMessage(0x101F, 0, 0, s.GridLV)                   ; LVM_GETHEADER
+    if !hdr
+        return false
+    rc := Buffer(16, 0)
+    if !SendMessage(0x1207, col - 1, rc.Ptr, hdr)                ; HDM_GETITEMRECT
+        return false
+    pt := Buffer(8, 0)
+    DllCall("GetCursorPos", "Ptr", pt)
+    DllCall("ScreenToClient", "Ptr", hdr, "Ptr", pt)
+    return V32_HitArrow(NumGet(pt, 0, "Int"), NumGet(rc, 0, "Int"), NumGet(rc, 8, "Int"), Round(18 * A_ScreenDPI / 96))
+}
+
+; @summary Fills the popup's list from the values, the search text and the ticks: "(Select all)" first, then each value that matches.
+; @tags filter, gui, v32
+V32_PopFill() {
+    p := V32_Pop()
+    if !p.Has("Lv")
+        return
+    needle := p["Search"].Value
+    p["Sync"] := true
+    p["Lv"].Opt("-Redraw")
+    p["Lv"].Delete()
+    shown := [], all := true
+    for v in p["Vals"] {
+        if needle != "" && !InStr(v, needle, false)
+            continue
+        shown.Push(v)
+        if !p["On"].Has(v)
+            all := false
+    }
+    p["Shown"] := shown
+    p["Lv"].Add(all && shown.Length ? "Check" : "", "(Select all)")
+    for v in shown
+        p["Lv"].Add(p["On"].Has(v) ? "Check" : "", v)
+    p["Lv"].Opt("+Redraw")
+    p["Sync"] := false
+}
+
+; @summary A tick box in the popup was changed (row 1 = Select all, which ticks / unticks every value shown).
+; @tags filter, gui, v32
+V32_PopTick(lv, item, checked) {
+    p := V32_Pop()
+    if !p.Has("Lv") || p["Sync"]
+        return
+    if item = 1 {
+        for v in p["Shown"]
+            if checked
+                p["On"][v] := 1
+            else if p["On"].Has(v)
+                p["On"].Delete(v)
+        V32_PopFill()
+        return
+    }
+    v := p["Shown"].Has(item - 1) ? p["Shown"][item - 1] : ""
+    if v = ""
+        return
+    if checked
+        p["On"][v] := 1
+    else if p["On"].Has(v)
+        p["On"].Delete(v)
+    p["Sync"] := true
+    try lv.Modify(1, (p["Shown"].Length && V32_AllOn(p) ? "" : "-") . "Check")
+    p["Sync"] := false
+}
+
+; @summary True when every value shown in the popup is ticked.
+; @tags filter, gui, v32
+V32_AllOn(p) {
+    for v in p["Shown"]
+        if !p["On"].Has(v)
+            return false
+    return true
+}
+
+; @summary Sets (or clears) one column's header filter. chosen = the values to keep, allValues = every value of the column.
+;          Picking every value (or none given) clears that column's filter. Refills the grid. Returns the number of rows shown.
+; @tags filter, grid, v32
+V32_SetPick(key, chosen, allValues) {
+    s := VMB()
+    if chosen.Length >= allValues.Length || !chosen.Length {
+        if s.Picks.Has(key)
+            s.Picks.Delete(key)
+    } else {
+        set := Map()
+        for v in chosen
+            set[v] := 1
+        s.Picks[key] := set
+    }
+    V27_Refill()
+    return s.GridRows.Length
+}
+
+; @summary OK in the popup: keeps the ticked values (at least one must be ticked) and closes it.
+; @tags filter, gui, v32
+V32_PopOK(*) {
+    p := V32_Pop()
+    if !p.Has("Lv")
+        return
+    chosen := []
+    for v in p["Vals"]
+        if p["On"].Has(v)
+            chosen.Push(v)
+    if !chosen.Length
+        return VMB_Status("Tick at least one value (or press Cancel).")
+    key := p["Key"], vals := p["Vals"]
+    V32_ClosePopup()
+    V32_SetPick(key, chosen, vals)
+}
+
+; @summary Closes the filter popup without changing anything.
+; @tags filter, gui, v32
+V32_ClosePopup(*) {
+    p := V32_Pop()
+    if p.Has("Gui") {
+        g := p["Gui"]
+        p.Clear()
+        try g.Destroy()
+    }
+}
+
+; @summary Opens the filter popup under a column's header: a search box, a tick list of the column's values (Select all first), OK / Cancel.
+;          A small borderless window, not a Menu (menus cannot hold tick lists). Values come from all steps; already picked values are ticked.
+; @tags filter, gui, v32
+V32_OpenPopup(col) {
+    s := VMB()
+    cols := V27_Columns()
+    if VM_IsRecording() || VM_IsPlaying() || s.View != "grid" || s.Sheet != "steps" || col < 1 || col > cols.Length
+        return
+    V28_Finish()
+    V32_ClosePopup()
+    key := cols[col].Key
+    vals := V32_Distinct(s.GridAll, key)
+    if !vals.Length
+        return VMB_Status("This column has no values to pick from.")
+    p := V32_Pop()
+    on := Map()
+    cur := s.Picks.Get(key, 0)
+    for v in vals
+        if !cur || cur.Has(v)
+            on[v] := 1
+    g := Gui("+Owner" . s.Gui.Hwnd . " +AlwaysOnTop -Caption +Border")
+    g.SetFont("s9", "Segoe UI")
+    p["Gui"] := g, p["Key"] := key, p["Vals"] := vals, p["On"] := on, p["Shown"] := [], p["Sync"] := false
+    p["Search"] := g.AddEdit("xm ym w230 h22")
+    SendMessage(0x1501, 1, StrPtr("Search..."), p["Search"])
+    p["Lv"] := g.AddListView("xm y+4 w230 h210 -Hdr -Multi +Checked", ["Value"])
+    p["Lv"].ModifyCol(1, 205)
+    ok := g.AddButton("xm y+6 w70 h24 Default", "OK")
+    ca := g.AddButton("x+6 yp w70 h24", "Cancel")
+    p["Search"].OnEvent("Change", (*) => V32_PopFill())
+    p["Lv"].OnEvent("ItemCheck", V32_PopTick)
+    ok.OnEvent("Click", V32_PopOK)
+    ca.OnEvent("Click", V32_ClosePopup)
+    g.OnEvent("Escape", V32_ClosePopup)
+    g.OnEvent("Close", V32_ClosePopup)
+    V32_PopFill()
+    x := 100, y := 100
+    hdr := SendMessage(0x101F, 0, 0, s.GridLV)
+    rc := Buffer(16, 0)
+    if hdr && SendMessage(0x1207, col - 1, rc.Ptr, hdr) {
+        pt := Buffer(8, 0)
+        NumPut("Int", NumGet(rc, 0, "Int"), "Int", NumGet(rc, 12, "Int"), pt)
+        DllCall("ClientToScreen", "Ptr", hdr, "Ptr", pt)
+        x := NumGet(pt, 0, "Int"), y := NumGet(pt, 4, "Int")
+    }
+    fct := 96 / A_ScreenDPI
+    x := Max(0, Min(x, A_ScreenWidth - 260 * A_ScreenDPI / 96))
+    g.Show("x" . Round(x * fct) . " y" . Round(y * fct) . " AutoSize")
+    p["Search"].Focus()
+    VMB_Status("Filter " . cols[col].Title . ": tick the values to show, then OK. This only changes what the grid shows.")
+}
+
+; @summary A click on a column title: in the arrow part opens the filter popup (returns true); anywhere else it is a sort click (returns false).
+; @returns Boolean
+; @tags filter, header, v32
+V32_HeaderClick(col) {
+    V32_ClosePopup()
+    if V32_HeaderHit(col) {
+        V32_OpenPopup(col)
+        return true
+    }
+    return false
+}
 
 ; ==== V32 END (new V32 functions are added above this line)
 
@@ -24163,6 +24461,19 @@ V4_SelfTest(path) {
         check("V32 find step: nothing yet starts at the first (forward) or last (backward) match, no matches gives 0", V32_FindStep(v32H, 0, 1) . V32_FindStep(v32H, 0, -1) . V32_FindStep([], 0, 1), "130")
         check("V32 find near: first match at or below the cursor row, wraps to the first", V32_FindNear(v32H, 2) . V32_FindNear(v32H, 3) . V32_FindNear(v32H, 9) . V32_FindNear([], 1), "2310")
         check("V32 find count text", V32_FindCount("", [], 0) . "|" . V32_FindCount("q", [], 0) . "|" . V32_FindCount("n", v32H, 2), "|No match|2 of 3")
+
+        v32R := [Map("n", "2", "p", "notepad", "a", "Click"), Map("n", "10", "p", "chrome", "a", "Type"), Map("n", "1", "p", "notepad", "a", "Type"), Map("n", "3", "p", "–", "a", "Click"), Map("n", "3", "a", "Wait")]
+        check("V32 distinct: numbers as numbers (1, 2, 10), dash last", V4_Join(V32_Distinct(v32R, "n"), ","), "1,2,3,10")
+        check("V32 distinct: text A to Z not case sensitive, numbers first, an empty / missing cell as dash last", V4_Join(V32_Distinct(v32R, "p"), ","), "chrome,notepad,–")
+        check("V32 distinct: mixed numbers and text, no duplicates", V4_Join(V32_Distinct([Map("v", "b"), Map("v", "10"), Map("v", "A"), Map("v", "9"), Map("v", "b"), Map("v", "2 s")], "v"), ","), "9,10,2 s,A,b")
+        check("V32 distinct: no rows gives nothing", V32_Distinct([], "n").Length, 0)
+        check("V32 picks: one column", V32_ApplyPicks(v32R, Map("p", Map("notepad", 1))).Length, 2)
+        check("V32 picks: two columns are ANDed", V32_ApplyPicks(v32R, Map("p", Map("notepad", 1), "a", Map("Type", 1))).Length . V32_ApplyPicks(v32R, Map("p", Map("notepad", 1), "a", Map("Type", 1)))[1]["n"], "11")
+        check("V32 picks: the dash picks empty and missing cells", V32_ApplyPicks(v32R, Map("p", Map("–", 1))).Length, 2)
+        check("V32 picks: no picks keeps every row and the input is untouched", V32_ApplyPicks(v32R, Map()).Length . "|" . v32R.Length, "5|5")
+        check("V32 header: arrow zone is the right 18 px, a click elsewhere sorts", V32_HitArrow(95, 0, 100, 18) . V32_HitArrow(70, 0, 100, 18) . V32_HitArrow(100, 0, 100, 18) . V32_HitArrow(85, 0, 100, 18), "1001")
+        check("V32 header: a narrow column gives the arrow at most half", V32_HitArrow(10, 0, 40, 30) . V32_HitArrow(25, 0, 40, 30), "01")
+        check("V32 header: titles (arrow, sort triangle, filtered mark)", V32_HeadTitle("Program", "", false) . "|" . V32_HeadTitle("Program", " ▲", false) . "|" . V32_HeadTitle("Program", "", true), "Program ▾|Program ▲ ▾|Program ▼=")
 
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
