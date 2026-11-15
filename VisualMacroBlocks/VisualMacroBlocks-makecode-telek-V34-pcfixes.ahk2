@@ -15799,7 +15799,7 @@ V26_HelpMenu(*) {
     m := Menu()
     m.Add("Help", VMB_Help)
     m.Add("Check this PC...", V26_CheckPC)
-    m.Show()
+    V34_ShowUnder(m, VMB().Ctl["Help"])           ; V34: opens under the ? button, not wherever the mouse happens to be
 }
 
 ; ============================================================================
@@ -16479,8 +16479,9 @@ V27_OnDoubleClick(lv, row) {
 ; @tags grid, gui, v27
 V27_OnMenu(lv, row, isRight, x, y) {
     s := VMB()
-    if V29_OnHeader(x, y)                          ; V29: right-click on the column heading = hide / show columns
-        return V29_ColMenu(x, y)
+    spot := V34_EventToScreen(s.Gui.Hwnd, x, y)    ; V34: ContextMenu x, y are client coordinates of the window
+    if V29_OnHeader(spot.X, spot.Y)                ; V29: right-click on the column heading = hide / show columns
+        return V29_ColMenu(spot.X, spot.Y)
     if row && V31_CellMenu(row, x, y)              ; V31: the Only when cell has its own menu (build a rule, otherwise, always)
         return
     if row && V30_TextMenu(row, x, y)              ; V30: the Text cell of a Type step has its own small menu
@@ -18455,7 +18456,7 @@ V29_ResetCols(*) {
 
 ; @summary True when a screen point is on the grid's column heading.
 ; @tags grid, columns, gui, v29
-V29_OnHeader(x, y) {
+V29_OnHeader(x, y) {         ; x, y are SCREEN coordinates (V34: callers convert the event's client coordinates first)
     s := VMB()
     if !s.GridLV || s.View != "grid" || !s.GridLV.Visible
         return false
@@ -18503,8 +18504,9 @@ V29_BuildColMenu() {
 ;          so the list's own event may not get it).
 ; @tags grid, columns, gui, v29
 V29_OnGuiMenu(gui, ctl, item, isRight, x, y) {
-    if V29_OnHeader(x, y)
-        V29_ColMenu(x, y)
+    spot := V34_EventToScreen(gui.Hwnd, x, y)      ; V34: client -> screen, then compare with the screen rectangle
+    if V29_OnHeader(spot.X, spot.Y)
+        V29_ColMenu(spot.X, spot.Y)
 }
 
 ; ============================================================================
@@ -24363,6 +24365,44 @@ V34_MultiClick(button, count) {
     }
 }
 
+; ---- V34 finding 2 / 8: menus at the right place ----------------------------------------------------------------------
+
+; @summary Client coordinates of a window -> screen coordinates, from the window's client origin on the screen.
+; @tags gui, menu, v34
+V34_ClientToScreenPt(originX, originY, x, y) => {X: originX + x, Y: originY + y}
+
+; @summary True when the point lies inside the rectangle (left / top included, right / bottom not).
+; @tags gui, menu, v34
+V34_InRect(x, y, left, top, right, bottom) => x >= left && x < right && y >= top && y < bottom
+
+; @summary Where a menu under a button goes: its left edge, the button's bottom, kept on the screen (menuW = a guess of the width).
+; @tags gui, menu, v34
+V34_UnderSpot(left, bottom, menuW, screenW) => {X: Max(0, Min(left, screenW - menuW)), Y: bottom}
+
+; @summary The ContextMenu event's x, y (client coordinates of the GUI) as a screen point.
+; @tags gui, menu, v34
+V34_EventToScreen(hwnd, x, y) {
+    pt := Buffer(8, 0)
+    NumPut("Int", Integer(x), "Int", Integer(y), pt)
+    if hwnd && DllCall("ClientToScreen", "Ptr", hwnd, "Ptr", pt)
+        return {X: NumGet(pt, 0, "Int"), Y: NumGet(pt, 4, "Int")}
+    return {X: x, Y: y}
+}
+
+; @summary Shows a menu under a GUI control (screen coordinates); falls back to the mouse pointer.
+; @tags gui, menu, v34
+V34_ShowUnder(m, ctl) {
+    try {
+        ctl.GetPos(&cx, &cy, , &ch)
+        spot := V34_EventToScreen(ctl.Gui.Hwnd, cx, cy + ch)
+        at := V34_UnderSpot(spot.X, spot.Y, 220, A_ScreenWidth)
+        CoordMode("Menu", "Screen")
+        m.Show(at.X, at.Y)
+        return
+    }
+    m.Show()
+}
+
 ; ==== V34 END (new V34 functions are added above this line)
 
 ; ============================================================================
@@ -26524,6 +26564,15 @@ V4_SelfTest(path) {
         v34P := V34_DblPlan(200, 40)
         check("V34 double-click plan: a short system time shrinks the presses", v34P.Cycle <= 100 + 20 && v34P.Hold >= 10, true)
         check("V34 double-click plan: unknown time uses 500", V34_DblPlan(0, 40).Cycle <= 250, true)
+        ; V34 finding 2: ContextMenu coordinates
+        v34Pt := V34_ClientToScreenPt(1092, 636, 300, 40)
+        check("V34 menu: client point + window origin = screen point", v34Pt.X . "," . v34Pt.Y, "1392,676")
+        check("V34 menu: a heading hit with screen coordinates", V34_InRect(v34Pt.X, v34Pt.Y, 1100, 660, 1900, 690), true)
+        check("V34 menu: the same client numbers used raw miss it (the V33 bug)", V34_InRect(300, 40, 1100, 660, 1900, 690), false)
+        check("V34 menu: right edge is outside", V34_InRect(1900, 670, 1100, 660, 1900, 690), false)
+        check("V34 menu: under a button", V34_UnderSpot(1000, 80, 220, 3840).X . "," . V34_UnderSpot(1000, 80, 220, 3840).Y, "1000,80")
+        check("V34 menu: kept on the screen", V34_UnderSpot(3800, 80, 220, 3840).X, 3620)
+        check("V34 menu: no window gives the point back", V34_EventToScreen(0, 5, 6).X . "," . V34_EventToScreen(0, 5, 6).Y, "5,6")
         check("V34 steady runner: a settle wait is only for steady input steps", V34_FloorMs(V18_Steady(V4Runner(VMF_NewMacro(), {})), VMF_NewMacro()["settings"]), 120)
     } catch as err {
         failures += 1
