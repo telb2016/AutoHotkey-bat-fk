@@ -25406,7 +25406,10 @@ V4_SelfTest(path) {
         v25Cut := V25_ParseRuns(V25_TrimRuns(v25Many))
         check("V25 trim: last 200 kept, newest last", v25Cut.Length . "|" . v25Cut[1]["When"] . "|" . v25Cut[200]["When"], "200|t6|t205")
         check("V25 trim: header stays first, short file unchanged", SubStr(V25_TrimRuns(v25Many), 1, 5) . "|" . (V25_TrimRuns(v25Txt . "") != "" ? 1 : 0), "When,|1")
-        check("V25 runs path", V25_RunsPath("C:\m\order.vmacro.json") . "|" . V25_RunsPath("") . "|" . V25_RunsPath("C:\m\plain"), "C:\m\order.vmacro.runs.csv||C:\m\plain.runs.csv")
+        check("V33.2 --data moves the data folder", V33_DataDir(["--data", "C:\Temp\vmb\data\"]) . "|" . V33_DataDir(["x.json", "--data", "C:\d"]), "C:\Temp\vmb\data|C:\d")
+        check("V33.2 without --data it is Documents\VisualMacros", V33_DataDir([]) . "|" . V33_DataDir(["--data"]), A_MyDocuments . "\VisualMacros|" . A_MyDocuments . "\VisualMacros")
+        check("V25 runs path is never beside the macro", RegExMatch(V25_RunsPath("X:\m\order.vmacro.json", "C:\h"), "^C:\\h\\order\.vmacro-[0-9a-f]{7}\.runs\.csv$") . "|" . V25_RunsPath(""), "1|")
+        check("V25 runs path differs for two folders, same for the same file", (V25_RunsPath("X:\a\x.json", "C:\h") != V25_RunsPath("X:\b\x.json", "C:\h")) . (V25_RunsPath("X:\a\x.json", "C:\h") = V25_RunsPath("x:\A\X.json", "C:\h")), "11")
         ; Self-test files stay in the local Downloads folder, never a drive letter that may be a network share.
         vmbTestRoot := EnvGet("USERPROFILE") . "\Downloads\vmb-selftest"
         v25Dir := vmbTestRoot . "\v25test-" . A_TickCount
@@ -25452,7 +25455,7 @@ V4_SelfTest(path) {
         check("V25 marks: not shaky adds nothing", V22_Marks(Map("type", "click")), "")
         check("V25 mark characters: symbol and plain", V22_MarkChars(0)["shaky"] . V22_MarkChars(1)["shaky"], "≈~")
         VM_Config().DeleteProp("HistoryDir")
-Thank you        DirDelete(v25Dir, true)
+        DirDelete(v25Dir, true)
         ; V27 item A: cell data of the step grid
         v27S := Map("steady", 1, "verifyClicks", 1)
         v27Ctx := Map("Num", 7, "App", "notepad", "HasRun", true, "History", true, "Shaky", false, "Settings", v27S)
