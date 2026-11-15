@@ -1,3 +1,7 @@
+; VisualMacroBlocks-makecode-telek-V33
+; V33 = V32 + more Excel: select a block of cells (Shift+arrows, Shift+click, Ctrl+Shift+arrows, Ctrl+A) with a summary in the status bar,
+;       copy / paste / fill down / fill right / clear a block (one undo step), the same on the List and Values sheets, frozen # and Action
+;       columns when the grid is scrolled sideways, an Excel look (grey headings and row numbers), and Undo keeps your row.
 ; VisualMacroBlocks-makecode-telek-V32
 ; V32 = V31 + rows like Excel rows: right-click a row (Insert step above / below, Duplicate, Delete, Move, Turn off), Alt+Up / Alt+Down move, Shift+Delete deletes,
 ;       Ctrl+Shift+plus inserts a Type step, Ctrl+Shift+D duplicates, Shift+Up / Shift+Down select several rows; filter arrows in the column titles;
@@ -426,7 +430,7 @@ VMB_Main() {
 VMB_BuildGui() {
     s := VMB()
     s.Easy := Integer(IniRead(s.Ini, "V17", "EasyMode", 1)) ? 1 : 0
-    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V32")
+    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V33")
     g.SetFont("s9", "Segoe UI")
     c := s.Ctl, lbl := s.Lbl
     c["Record"] := g.AddButton("xm ym w105 h30", "&Record")
@@ -3556,7 +3560,7 @@ VMB_UpdateTitle() {
     if s.Path != ""
         SplitPath(s.Path, &name)
     savedTag := s.Dirty ? " *" : (s.LastSavedAt != "" ? " (saved " . s.LastSavedAt . ")" : "")
-    s.Gui.Title := "Visual Macro Blocks V32" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
+    s.Gui.Title := "Visual Macro Blocks V33" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
     V7_SyncIdleHud()
 }
 
@@ -12939,7 +12943,10 @@ V17_EasyDesc(kind, fallback) {
 ; @summary Easy-mode "?" help: the three-step flow in plain words.
 ; @tags macro, gui, help, easy, v17
 V17_EasyHelp(*) {
-    MsgBox("ROWS - THE EXCEL WAY"
+    MsgBox("CELLS - THE EXCEL WAY"
+        . "`nShift+arrows (or Shift+click) select a block of cells; the status bar adds them up. Ctrl+C copies, Ctrl+V pastes a block (or one value onto all selected cells),"
+        . " Ctrl+D fills down, Ctrl+R fills right, Delete clears. One Ctrl+Z undoes a whole paste. # and Action stay in view when you scroll sideways."
+        . "`n`nROWS - THE EXCEL WAY"
         . "`nClick a row: Alt+Up / Alt+Down move it, Shift+Delete deletes it, Ctrl+Shift+D duplicates it, Ctrl+Shift+plus adds a Type step below."
         . " Shift+Up / Shift+Down pick several rows. Click the arrow in a column title to pick which values to show. Ctrl+F finds text. Ctrl+Z undoes."
         . "`n`nRULES - THE EXCEL WAY"
@@ -24288,7 +24295,16 @@ V4_ExportPlayer(*) {
         MsgBox(err.Message, "V10 export failed", "Iconx")
 }
 V4_Help(*) {
-    MsgBox("NEW IN V32 (rows like Excel):"
+    MsgBox("NEW IN V33 (more Excel: blocks of cells):"
+        . "`n• Select several cells: Shift+arrows or Shift+click; Ctrl+Shift+arrow goes to the edge, Ctrl+A selects every cell. A plain arrow or click goes back to one cell."
+        . " The status bar says how many cells, and for Waits first the total time (on the List sheet the sum of numbers)."
+        . "`n• Ctrl+C copies the block as text (Excel can paste it). Ctrl+V pastes a block from the current cell, or one value onto the whole selection, cell by cell;"
+        . " cells that cannot take a value are skipped and counted. Ctrl+D fills down, Ctrl+R fills right, Delete clears the cells that can be cleared. One Ctrl+Z undoes it all."
+        . " On the List sheet a paste below the last row adds rows (an empty List still pastes the whole list as before)."
+        . "`n• The # and Action columns stay at the left when you scroll sideways (right-click a column title: Freeze # and Action). Grey headings and row numbers like Excel"
+        . " (ini [V33] ExcelLook=0 brings the old look back). After Ctrl+Z the same row is selected again."
+        . "`n`n"
+        . "NEW IN V32 (rows like Excel):"
         . "`n• Click a row, then Alt+Up / Alt+Down moves it, Shift+Delete deletes it (asked once), Ctrl+Shift+plus adds a Type step below, Ctrl+Shift+D duplicates it."
         . " Shift+Up / Shift+Down (or Shift+click) pick several rows; the keys then work on all of them. Right-click a row for the same things. Ctrl+Z undoes each one."
         . " Rows only move in step order: with a sort or filter on, press Step order / Clear first."
