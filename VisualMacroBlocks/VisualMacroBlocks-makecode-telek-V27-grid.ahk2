@@ -1,3 +1,6 @@
+; VisualMacroBlocks-makecode-telek-V27
+; V27 = V26 + an Excel-style step grid: a real table (one row per step, every cell filled, grid lines) next to the old list.
+;       [List] [Grid] buttons switch the view; the grid only shows the steps, editing and order stay the same.
 ; VisualMacroBlocks-makecode-telek-V26
 ; V26 = V25 + a "Check this PC" button (? button / right-click menu): one automatic check with one result window to copy.
 ; VisualMacroBlocks-makecode-telek-V25
@@ -229,7 +232,8 @@ VMB() {
         FontSize: 9, Checked: Map(), AnchorNode: 0, CloseNotified: false, AutoSavePath: "", LastSavedAt: "",
         LastEditedStep: "", IdleHud: 0, OpenExes: 0, QuickLookGui: 0, Insp: 0, InspShown: 1, ShowMeaning: 1,
         Easy: 1, FullPos: 0, PinHwnd: 0, Lbl: Map(), RecWasEmpty: false, AppShow: 0, LastNotes: Map(), Shaky: Map(),
-        Columns: 1, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0}
+        Columns: 1, View: "grid", GridLV: 0, GridRows: [], GridNodes: Map(), GridRowOf: Map(), GridSync: false, GridSized: false,
+        HasRun: false, History: false, ColApp: 0, ColStarts: 0, IndentChars: 3, IndentSeen: "", MaxDepth: 0, CharH: 0}
     return s
 }
 
@@ -284,7 +288,7 @@ VMB_Main() {
 VMB_BuildGui() {
     s := VMB()
     s.Easy := Integer(IniRead(s.Ini, "V17", "EasyMode", 1)) ? 1 : 0
-    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V22")
+    g := Gui("+Resize +MinSize1270x630", "Visual Macro Blocks V27")
     g.SetFont("s9", "Segoe UI")
     c := s.Ctl, lbl := s.Lbl
     c["Record"] := g.AddButton("xm ym w105 h30", "&Record")
@@ -480,6 +484,7 @@ VMB_BuildGui() {
     s.Pal.OnNotify(-12, VMB_OnCustomDraw)
     g.OnEvent("Size", VMB_OnSize)
     g.OnEvent("Close", VMB_OnClose)
+    V27_BuildGrid(g)                    ; V27: the grid (ListView) and the List / Grid buttons
     s.Gui := g
 }
 
@@ -682,7 +687,9 @@ VMB_Refresh(selectNode := "") {
     s.MaxDepth := V22_MaxDepth(s.Macro["blocks"])               ; V22.1: the left margin is sized to the deepest row
     r := V22_FillApps(VMF_Flatten(s.Macro["blocks"]), s.Macro["settings"])     ; V22: the Program column, every row
     s.OpenExes := V24_OpenExes()                                ; V24: which programs are running right now (only here, no timer)
-    s.Shaky := V25_Shaky(V25_ReadRuns(s.Path))                  ; V25: steps with a note in 3 or more of the last 10 runs (history file read once here)
+    runsSeen := V25_ReadRuns(s.Path)
+    s.History := runsSeen.Length > 0                            ; V27: the grid says "no history" when there are no runs
+    s.Shaky := V25_Shaky(runsSeen)                  ; V25: steps with a note in 3 or more of the last 10 runs (history file read once here)
     V24_MarkApps(r.App, s.OpenExes, VMF_Flatten(s.Macro["blocks"]))     ; V24: "notepad?" when it is not running
     s.ColApp := r.App, s.ColStarts := r.Starts
     tv.Opt("-Redraw")
@@ -696,6 +703,8 @@ VMB_Refresh(selectNode := "") {
     V13_InspLoad()
     V17_UpdateWinInfo()
     V22_PlaceHeader()
+    if s.View = "grid" && s.GridLV
+        V27_FillGrid()              ; V27: the grid follows the tree (same steps, same selection)
 }
 
 VMB_AddBody(list, parentId, owner, emptyText := "(empty - drag steps here)", off := false, depth := 0) {
@@ -2883,6 +2892,7 @@ VMB_Play(onlySelected := false, startMode := "run", runTo := 0) {
             note := "   Corrections were made - Save to keep them."
         }
     }
+    s.HasRun := true                ; V27: the grid's Last run column
     s.LastNotes := onlySelected ? keptNotes : V21_NoteSteps(result.HasOwnProp("Warnings") ? result.Warnings : [])
     played := VMF_Flatten(macro["blocks"])
     if !onlySelected && startMode = "run" && !IsObject(runTo)       ; V25: whole-macro runs only (not selected steps, not step by step, not run-to-line)
@@ -2914,6 +2924,8 @@ VMB_PlayStatus(i, n, pass, text, row := 0, lastRow := 0) {
         s.HiItem := s.NodeItem[s.PlayFlat[i]]
         SendMessage(0x1114, 0, s.HiItem, s.TV)      ; TVM_ENSUREVISIBLE
         DllCall("InvalidateRect", "Ptr", s.TV.Hwnd, "Ptr", 0, "Int", 1)
+        if s.View = "grid"
+            V27_ShowNode(s.PlayFlat[i])         ; V27: the running step's row is selected and in view
     }
 }
 
@@ -3331,6 +3343,7 @@ VMB_SetMacro(macro, path) {
     s.Dirty := false
     s.Undo := [], s.Redo := []
     s.LastNotes := Map()            ; V21: a new or opened macro has no notes from a run
+    s.HasRun := false               ; V27: nothing has run yet
     s.Checked := Map()
     VMB_SettingsToControls()
     V7_LoadMemoryBar()
@@ -3374,7 +3387,7 @@ VMB_UpdateTitle() {
     if s.Path != ""
         SplitPath(s.Path, &name)
     savedTag := s.Dirty ? " *" : (s.LastSavedAt != "" ? " (saved " . s.LastSavedAt . ")" : "")
-    s.Gui.Title := "Visual Macro Blocks V22" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
+    s.Gui.Title := "Visual Macro Blocks V27" . (s.Easy ? " Easy" : "") . " - " . name . savedTag . " - " . s.FlatIndex.Count . " steps"
     V7_SyncIdleHud()
 }
 
@@ -12454,6 +12467,7 @@ V17_ApplyMode() {
         DllCall("SendMessage", "Ptr", g.Hwnd, "UInt", 0x000B, "Ptr", 1, "Ptr", 0)
         DllCall("RedrawWindow", "Ptr", g.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0485)     ; erase + all children + frame
     }
+    V27_PlaceGrid()
     if !s.Easy && s.InspShown
         V13_InspLoad()
     V17_UpdateWinInfo()
@@ -12485,7 +12499,7 @@ V17_EasyLayout(full) {
         x := place(name, x, y2) + 6
     place("WinInfo", x + 14, y2 + 5, 760, 20)
     dy := full["lbl:HdrBlocks"][2] - (y2 + full["New"][4] + 14)
-    for name in ["lbl:HdrBlocks", "lbl:HdrMacro", "Undo", "Redo", "Search", "Pal", "TV", "ColHead"] {
+    for name in ["lbl:HdrBlocks", "lbl:HdrMacro", "Undo", "Redo", "Search", "Pal", "TV", "ColHead", "ViewList", "ViewGrid"] {
         q := full[name]
         out[name] := [q[1], q[2] - dy, q[3], q[4]]
     }
@@ -12593,6 +12607,9 @@ V17_EasyHelp(*) {
         . "  the last 10 runs - check this step)."
         . "`n• Right-click the list -> Show columns (or the Columns tick box in the Step settings panel) for the V21 lines."
         . "`n`nNeed CSV rows, web pages, pictures or anything else? Click 'More features ▸' (Ctrl+Shift+E)."
+        . "`n`nNEW IN V27: the [List] [Grid] buttons above the steps switch to a table with one row per step and every detail in its own"
+        . " cell (program, window, size, action, spot, keys...). A dash (–) means it does not apply to that step. The grid is only a view: Edit,"
+        . " Delete and the other buttons work on the selected row as before."
         . "`n`nNEW IN V26: ? button > Check this PC (or right-click the list) runs a 20-second check and shows one result to copy."
         . "`nEmergency exit: Ctrl+Shift+X." . V22_ColumnCheckLine(VMB().IndentSeen), "Visual Macro Blocks V18 - Easy mode", "Iconi")
 }
@@ -14647,7 +14664,8 @@ V22_PlaceHeader() {
             head.Move(hx, hy, Max(50, tx + tw - hx), hh)
         }
     }
-    head.Visible := show
+    head.Visible := show && s.View != "grid"
+    V27_PlaceGrid()                                                       ; V27: the grid sits where the tree is
 }
 
 ; @summary "Columns" tick box / "Show columns" menu entry: step list in fixed columns on or off (remembered).
@@ -15758,6 +15776,179 @@ V27_Rows(blocks, settings, state) {
     return rows
 }
 
+; ----------------------------------------------------------------------------
+; V27 item B: the grid in the window (a ListView where the tree is; the tree stays the source of truth)
+; ----------------------------------------------------------------------------
+
+; @summary Builds the grid ListView and the [List] [Grid] buttons (called once at the end of VMB_BuildGui). The grid is
+;          s.GridLV (not in s.Ctl); the two buttons are c["ViewList"] / c["ViewGrid"]. Placed by V27_PlaceGrid.
+; @tags grid, gui, v27
+V27_BuildGrid(g) {
+    s := VMB(), c := s.Ctl
+    s.View := IniRead(s.Ini, "V27", "View", "grid") = "list" ? "list" : "grid"
+    c["ViewList"] := g.AddButton("x10 y10 w46 h20", "List")
+    c["ViewGrid"] := g.AddButton("x+4 yp w46 h20", "Grid")
+    c["ViewList"].OnEvent("Click", (*) => V27_SetView("list"))
+    c["ViewGrid"].OnEvent("Click", (*) => V27_SetView("grid"))
+    titles := []
+    for col in V27_Columns()
+        titles.Push(col.Title)
+    s.GridLV := g.AddListView("x10 y40 w600 h300 Grid -Multi +LV0x10000 Hidden", titles)
+    s.GridLV.SetFont("s" . s.FontSize, "Segoe UI")
+    for i, col in V27_Columns()
+        s.GridLV.ModifyCol(i, col.Width)
+    s.GridLV.OnEvent("ItemSelect", V27_OnSelect)
+    s.GridLV.OnEvent("DoubleClick", V27_OnDoubleClick)
+    s.GridLV.OnEvent("ContextMenu", V27_OnMenu)
+}
+
+; @summary Puts the grid exactly on the tree's place (same position and size), shows the grid or the tree for the
+;          current view, hides the column header line in grid view, puts the [List] [Grid] buttons at the right end
+;          of the header line and greys the button of the view that is on. Safe when there is no grid (hidden test windows).
+; @tags grid, gui, v27
+V27_PlaceGrid() {
+    s := VMB()
+    if !s.GridLV || !s.TV || !s.Gui || !s.Ctl.Has("ViewGrid")
+        return
+    grid := s.View = "grid"
+    s.TV.GetPos(&tx, &ty, &tw, &th)
+    s.GridLV.Move(tx, ty, tw, th)
+    hy := ty - 16
+    if s.Ctl.Has("ColHead")
+        s.Ctl["ColHead"].GetPos(, &hy)
+    bh := Max(16, ty - hy)
+    s.Ctl["ViewGrid"].Move(tx + tw - 46, hy, 46, bh)
+    s.Ctl["ViewList"].Move(tx + tw - 96, hy, 46, bh)
+    s.Ctl["ViewGrid"].Enabled := !grid
+    s.Ctl["ViewList"].Enabled := grid
+    if s.Ctl.Has("ColHead") && grid
+        s.Ctl["ColHead"].Visible := false
+    s.TV.Visible := !grid
+    s.GridLV.Visible := grid
+}
+
+; @summary Switches between the tree (list) and the grid, remembers the choice in the ini ([V27] View).
+; @tags grid, gui, v27
+V27_SetView(view) {
+    s := VMB()
+    if VM_IsRecording() || VM_IsPlaying()
+        return
+    if s.View = view
+        return
+    node := V27_SelectedNode()
+    s.View := view
+    IniWrite(view, s.Ini, "V27", "View")
+    if view = "grid"
+        V27_FillGrid()
+    V22_PlaceHeader()
+    V27_PlaceGrid()
+    VMB_Status(view = "grid" ? "Grid view: one row per step. The steps and their order are the same as in the list."
+        : "List view.")
+}
+
+; @summary The node selected in the tree (the tree is always the source of truth), or 0.
+; @tags grid, gui, v27
+V27_SelectedNode() {
+    s := VMB()
+    info := s.TV ? s.Items.Get(s.TV.GetSelection(), 0) : 0
+    return info && info.HasOwnProp("Node") ? info.Node : 0
+}
+
+; @summary The state V27_Rows needs, taken from the editor (last run notes, run history, running programs).
+; @tags grid, gui, v27
+V27_State() {
+    s := VMB()
+    return Map("LastNotes", s.LastNotes, "Shaky", s.Shaky, "Open", s.OpenExes is Map ? s.OpenExes : Map(),
+        "HasRun", s.HasRun, "History", s.History)
+}
+
+; @summary Fills the grid with rows (default: all steps in step order). A later sort / filter passes its own row array.
+;          Keeps s.GridRows (the rows shown), s.GridNodes (grid row number -> step node) and s.GridRowOf (node -> row),
+;          then selects the row of the tree's selected step. Column widths are fitted to the content on the first fill
+;          that has rows (not below the start width of V27_Columns, capped at 320 px for the long text columns).
+; @tags grid, gui, v27
+V27_FillGrid(rows := "") {
+    s := VMB()
+    lv := s.GridLV
+    if !lv || !(s.Macro is Map)
+        return
+    keep := V27_SelectedNode()
+    if !IsObject(rows)
+        rows := V27_Rows(s.Macro["blocks"], s.Macro["settings"], V27_State())
+    cols := V27_Columns()
+    s.GridRows := rows, s.GridNodes := Map(), s.GridRowOf := Map()
+    s.GridSync := true
+    lv.Opt("-Redraw")
+    lv.Delete()
+    for r in rows {
+        cells := []
+        for col in cols
+            cells.Push(r.Get(col.Key, "–"))
+        n := lv.Add("", cells*)
+        s.GridNodes[n] := r.Node
+        s.GridRowOf[r.Node] := n
+    }
+    if rows.Length && !s.GridSized {
+        s.GridSized := true
+        capped := Map("text", 1, "target", 1, "inside", 1, "note", 1, "lastrun", 1)
+        for i, col in cols {
+            lv.ModifyCol(i, "AutoHdr")
+            wide := SendMessage(0x101D, i - 1, 0, lv)           ; LVM_GETCOLUMNWIDTH
+            if wide < col.Width                                 ; never narrower than the start width
+                lv.ModifyCol(i, col.Width)
+            else if capped.Has(col.Key) && wide > 320
+                lv.ModifyCol(i, 320)
+        }
+    }
+    lv.Opt("+Redraw")
+    s.GridSync := false
+    V27_ShowNode(keep, false)
+}
+
+; @summary Selects (and scrolls to) the grid row of a step. propagate = false: the tree is not touched (it already
+;          has the selection, or - while playing - must keep it).
+; @tags grid, gui, v27
+V27_ShowNode(node, propagate := false) {
+    s := VMB()
+    if !s.GridLV || !IsObject(node) || !s.GridRowOf.Has(node)
+        return
+    s.GridSync := !propagate
+    try s.GridLV.Modify(s.GridRowOf[node], "Select Focus Vis")
+    s.GridSync := false
+}
+
+; @summary Grid row selected: select the same step in the (hidden) tree so every button keeps working.
+; @tags grid, gui, v27
+V27_OnSelect(lv, row, selected) {
+    s := VMB()
+    if !selected || s.GridSync || !row
+        return
+    node := s.GridNodes.Get(row, 0)
+    if IsObject(node) && s.NodeItem.Has(node)
+        s.TV.Modify(s.NodeItem[node], "Select")
+}
+
+; @summary Double-click a grid row: Edit that step.
+; @tags grid, gui, v27
+V27_OnDoubleClick(lv, row) {
+    if row
+        VMB_EditSelected()
+}
+
+; @summary Right-click a grid row: the same menu as the tree for that step.
+; @tags grid, gui, v27
+V27_OnMenu(lv, row, isRight, x, y) {
+    s := VMB()
+    node := row ? s.GridNodes.Get(row, 0) : 0
+    if IsObject(node) && s.NodeItem.Has(node) {
+        s.GridSync := true
+        lv.Modify(row, "Select Focus")
+        s.GridSync := false
+        s.TV.Modify(s.NodeItem[node], "Select")
+        VMB_TreeMenu(s.TV, s.NodeItem[node], isRight, x, y)
+    }
+}
+
 ; ============================================================================
 ; V4 STARTUP / SINGLE-FILE PLAYER EXPORT
 ; ============================================================================
@@ -15858,7 +16049,11 @@ V4_ExportPlayer(*) {
         MsgBox(err.Message, "V10 export failed", "Iconx")
 }
 V4_Help(*) {
-    MsgBox("NEW IN V22 (step list in columns):"
+    MsgBox("NEW IN V27 (the step grid):"
+        . "`n• The [List] [Grid] buttons above the steps switch between the tree and a table: one row per step, every detail in"
+        . "  its own cell. A dash (–) means the column does not apply to that step. The grid is only a view: select a row and use"
+        . "  Edit, Delete, Move up / down as usual; double-click a row edits it; right-click shows the same menu as the list."
+        . "`n`nNEW IN V22 (step list in columns):"
         . "`n• Every step row has fixed columns:  #   Program   Waits   Marks   What it does. The Program column is filled on"
         . "  every row (a Wait step shows the program of the step before it)."
         . "`n• Waits = the pause before the step. A * after the time (500 ms*) = a wait you set by hand."
@@ -16251,12 +16446,12 @@ V4_SelfTest(path) {
         check("V17 Easy click popup hides the coordinates", V17_EasyFieldsFor("click").Has("scrX"), false)
         v17Full := Map()
         for v17N in ["Record", "Stop", "Play", "Step", "PickWin", "EasyToggle", "Help", "New", "Open", "Recent", "Save", "SaveAs",
-            "WinInfo", "lbl:HdrBlocks", "lbl:HdrMacro", "Undo", "Redo", "Search", "Pal", "TV", "ColHead", "Edit", "Delete", "Up", "Down", "In", "Out"]
+            "WinInfo", "lbl:HdrBlocks", "lbl:HdrMacro", "Undo", "Redo", "Search", "Pal", "TV", "ColHead", "ViewList", "ViewGrid", "Edit", "Delete", "Up", "Down", "In", "Out"]
             v17Full[v17N] := [100, 500, 50, 24]
         v17Full["Record"] := [10, 10, 105, 30], v17Full["Stop"] := [121, 10, 65, 30]
         v17Full["New"] := [10, 50, 56, 26], v17Full["lbl:HdrBlocks"] := [10, 200, 200, 20], v17Full["TV"] := [250, 230, 940, 400]
         v17L := V17_EasyLayout(v17Full)
-        check("V17 Easy layout shows 27 controls (V22: + the column header)", v17L.Count, 27)
+        check("V17 Easy layout shows 29 controls (V22: + the column header, V27: + the List / Grid buttons)", v17L.Count, 29)
         check("V22 Easy layout moves the column header up with the tree", v17L["ColHead"][2], 500 - (200 - (50 + 26 + 14)))
         check("V17 Easy row 1: Stop right after Record", v17L["Stop"][1] . "," . v17L["Stop"][2], "121,10")
         check("V17 Easy row 1: Pick window on the top row", v17L["PickWin"][2] . "," . v17L["PickWin"][4], "10,30")
@@ -16967,6 +17162,29 @@ V4_SelfTest(path) {
                 if row.Get(col.Key, "") = ""
                     v27Empty += 1
         check("V27 rows: no empty cell", v27Empty, 0)
+        ; V27 item B: the grid fill, run on a hidden window
+        v27S2 := VMB(), v27OldLV := v27S2.GridLV, v27OldMacro := v27S2.Macro, v27OldTV := v27S2.TV, v27OldSized := v27S2.GridSized
+        v27Gui := Gui()
+        v27ColTitles := []
+        for v27Col in v27Cols
+            v27ColTitles.Push(v27Col.Title)
+        v27S2.GridLV := v27Gui.AddListView("w600 h200 Grid", v27ColTitles)
+        v27S2.TV := 0, v27S2.GridSized := false
+        v27S2.Macro := VMF_NewMacro()
+        v27S2.Macro["blocks"] := v27Blocks
+        V27_FillGrid()
+        check("V27 grid: one list row per step", v27S2.GridLV.GetCount(), 3)
+        check("V27 grid: a column per cell kind", v27S2.GridLV.GetCount("Col"), v27Cols.Length)
+        check("V27 grid: cell text (row 1 Inside, row 3 Action)", v27S2.GridLV.GetText(1, 2) . "|" . v27S2.GridLV.GetText(3, 6), "Repeat 5 times|Press")
+        check("V27 grid: row -> node map", v27S2.GridNodes[3]["type"] . v27S2.GridNodes.Count, "keys3")
+        check("V27 grid: node -> row map", v27S2.GridRowOf[v27Blocks[2]], 3)
+        check("V27 grid: no empty cell", v27S2.GridLV.GetText(2, v27Cols.Length) != "" && v27S2.GridLV.GetText(2, 8) != "", true)
+        V27_FillGrid([v27S2.GridRows[3], v27S2.GridRows[1]])
+        check("V27 grid: another row array is shown as given (for sort / filter)", v27S2.GridLV.GetCount() . v27S2.GridNodes[1]["type"] . v27S2.GridNodes[2]["type"], "2keysclick")
+        v27S2.GridLV := v27OldLV, v27S2.Macro := v27OldMacro, v27S2.TV := v27OldTV, v27S2.GridSized := v27OldSized
+        v27S2.GridRows := [], v27S2.GridNodes := Map(), v27S2.GridRowOf := Map()
+        v27Gui.Destroy()
+        check("V27 grid: place / fill without a grid do nothing", V27_PlaceGrid() . V27_FillGrid(), "")
         ; V27 check this PC (scroll test in a helper program)
         check("V27 helper: has a list box and a multi-line text box", InStr(V27_ScrollHelperText(), "ListBox") > 0 && InStr(V27_ScrollHelperText(), "Multi") > 0, true)
         check("V27 helper: 300 rows and 300 lines", InStr(V27_ScrollHelperText(), "loop 300") > 0, true)

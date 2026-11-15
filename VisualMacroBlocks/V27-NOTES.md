@@ -30,3 +30,34 @@ Self-test: `Failures: 0`, **524 PASS** (V26 had 466).
 
 ## Not done (out of this run's scope)
 - Items B, C, D, E of V27, Part 2 (V28), help text / version. Line 1 and the window title still say V26.
+
+## Fix to Item A - Window column
+- "main window" now means: the step's window class equals the class in the macro's Macro-window setting
+  (`defaultTarget`, the class after `ahk_class`). New `V27_MainClass(settings)`; `V27_Cells` passes it to `V27_WindowText`.
+  With no Macro window set nothing is called "main window" (the plain class name shows). 529 PASS after this fix.
+
+## Item B - the grid in the window
+- `s.GridLV` (ListView, report mode, grid lines, single selection, double-buffered) is built last in `VMB_BuildGui`
+  (`V27_BuildGrid`) with the buttons `c["ViewList"]`, `c["ViewGrid"]`. Not in the tree's place in the code: it is *moved to the
+  tree's geometry* by `V27_PlaceGrid`, which `V22_PlaceHeader` calls at its end. That one hook covers resize, zoom, Easy/Full
+  switch and refresh. The tree is hidden (not destroyed) in grid view, the V22 header line is hidden too.
+- The [List] [Grid] buttons sit at the right end of the header line above the list (the current view's button is greyed).
+  Both are in the Easy layout, so the Easy-layout self-test count went from 27 to 29.
+- `V27_FillGrid(rows := "")`: default = all steps in step order; a later sort / filter can pass its own row array.
+  Keeps `s.GridRows`, `s.GridNodes` (row -> node), `s.GridRowOf` (node -> row). Called at the end of `VMB_Refresh` in grid view.
+  Column widths fitted on the first fill with rows (not below the start width, capped at 320 px for text, target, inside, note, lastrun).
+- Selection: grid row -> `s.TV.Modify(...,"Select")` (`V27_OnSelect`); after a refresh the tree's selected step is selected in the
+  grid (`V27_ShowNode`); `VMB_PlayStatus` selects the running row in grid view (the tree is not touched). Double-click = Edit,
+  right-click = `VMB_TreeMenu`. View is remembered in the ini (`[V27] View`, default grid).
+- `s.HasRun` (set after a run, cleared on new / open) and `s.History` (run history file has rows) feed the Last run / Often shaky columns.
+- Help: line 1 and both window titles say V27; "NEW IN V27" paragraph in `V4_Help` and `V17_EasyHelp`.
+- Self-test: **537 PASS**, Failures 0 (8 new checks incl. the fill on a hidden window).
+- Seen live (Wine, harness, 9 steps incl. a Repeat): grid shows 9 rows, in Full and Easy mode, the grid has exactly the tree's
+  position and size (logged equal) before and after resize, zoom and mode switches; tree visible again in list view.
+  Screenshot `V27-grid-preview.png`: headers, grid lines, filled cells, "–" in non-applicable cells, grid where the tree was.
+  Keyboard Down in the grid moved the tree selection to the same step.
+- Unsure: under Wine a `ListView.Modify(row, "Select")` from code does not raise the ItemSelect event (a real Down key does), so
+  selection sync was checked via the key press and by calling the handler directly; mouse clicks could not be tested here.
+  Double-click / right-click handlers and the playback row follow are written but not exercised live. The grid font looks larger
+  than the tree's under Wine (font fallback); not checked on Windows.
+- Not done: items C (sort), D (filter), E (copy), Part 2 (V28); PC-TEST-ALL "Grid" section.
