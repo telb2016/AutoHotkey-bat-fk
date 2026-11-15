@@ -370,7 +370,8 @@ VMB() {
         GridMark: Map(), RuleDlg: 0, ListEditOn: false, ListEditRow: 0, ListEditLvRow: 0, ListEditCol: 3, ListEditOrig: "", ListCol: 3,
         ValLV: 0, ValBar: Map(), ValUndo: [], ValRedo: [], ValEditOn: false, ValEditRow: 0, ValEditCol: 1, ValEditOrig: "", ValEditPick: false, ValCol: 1,
         GridRange: 0, GridBands: [], Bands: true, V32Last: 0, V32Rows: Map(), V32Asked: false, V32NoAsk: false, Picks: Map(), FindBar: Map(), FindOn: false, FindHits: [], FindAt: 0, FindSheet: "",
-        V33: 0, V33C: 0, ExcelLook: true, ListRange: 0, ValRange: 0, ShLast: Map(), ShSync: false, V33S: 0}
+        V33: 0, V33C: 0, ExcelLook: true, ListRange: 0, ValRange: 0, ShLast: Map(), ShSync: false, V33S: 0,
+        GridFreeze: 0, Freeze: true, FrzDirty: true, FrzShown: false, FrzSync: false, FrzSig: "", FrzSel: 0, FrzErr: ""}
     return s
 }
 
@@ -16286,6 +16287,7 @@ V27_PlaceGrid() {
         s.Ctl["ColHead"].Visible := false
     s.TV.Visible := !grid
     s.GridLV.Visible := grid && s.Sheet = "steps"
+    V33_FreezeTick(true)                                       ; V33: the frozen pane follows the grid's place
 }
 
 ; @summary Switches between the tree (list) and the grid, remembers the choice in the ini ([V27] View).
@@ -16380,6 +16382,8 @@ V27_FillGrid(rows := "") {
     s.GridSync := false
     V27_SortMarks()
     V27_ShowNode(keep, false)
+    s.FrzDirty := true                                         ; V33: the frozen pane copies the new rows
+    V33_FreezeTick()
 }
 
 ; @summary Selects (and scrolls to) the grid row of a step. propagate = false: the tree is not touched (it already
@@ -16459,6 +16463,7 @@ V27_ApplyGridFont() {
         return
     s.GridLV.SetFont("s" . V29_ZoomFont(9, s.GridZoom), "MS Shell Dlg 2")     ; V29: the grid has its own zoom (not the list's A+ / A-)
     s.GridLV.SetFont(, "Segoe UI")
+    V33_ApplyFreezeFont()                                      ; V33: the frozen pane has the same font
     V30_ApplyListFont()
 }
 
@@ -18440,6 +18445,9 @@ V29_BuildColMenu() {
             m.Check(col.Title)
     }
     m.Add()
+    m.Add("Freeze # and Action", V33_ToggleFreeze)             ; V33: the # and Action columns stay in view when scrolling sideways
+    if s.Freeze
+        m.Check("Freeze # and Action")
     m.Add("Reset columns", V29_ResetCols)
     return m
 }
@@ -19073,6 +19081,7 @@ V30_Build(g) {
     V31_BuildValues(g)                                         ; V31.1: the Values sheet
     V32_BuildFind(g)                                           ; V32: the Find bar (Ctrl+F)
     V33_StyleTabs()                                            ; V33: the active tab is bold
+    V33_BuildFreeze(g)                                         ; V33: the frozen # and Action pane
 }
 
 ; @summary The List sheet's font follows the grid zoom (same fonts as the grid).
@@ -23412,6 +23421,9 @@ V33_LoadIni() {
     try s.ExcelLook := IniRead(s.Ini, "V33", "ExcelLook", 1) != "0"
     catch
         s.ExcelLook := true
+    try s.Freeze := IniRead(s.Ini, "V33", "Freeze", 1) != "0"
+    catch
+        s.Freeze := true
     s.V33C := V33_LookBgr()
 }
 
@@ -23914,13 +23926,20 @@ V33_OnWmNotify(wParam, lParam, msg, hwnd) {
         return
     if !IsObject(hdrs) {
         hdrs := Map()
-        for lv in [s.GridLV, s.ListLV, s.ValLV]
+        for lv in [s.GridLV, s.ListLV, s.ValLV, s.GridFreeze]
             if lv
                 try hdrs[SendMessage(0x101F, 0, 0, lv)] := lv                  ; LVM_GETHEADER
     }
     from := NumGet(lParam, 0, "Ptr")
-    if !hdrs.Has(from)
-        return
+    if !hdrs.Has(from) {
+        if DllCall("GetClassNameW", "Ptr", from, "Ptr", cls := Buffer(80, 0), "Int", 40) && StrGet(cls) = "SysHeader32" {      ; a heading list made after the map (the frozen pane's)
+            for lv in [s.GridLV, s.ListLV, s.ValLV, s.GridFreeze]
+                if lv
+                    try hdrs[SendMessage(0x101F, 0, 0, lv)] := lv
+        }
+        if !hdrs.Has(from)
+            return
+    }
     stage := NumGet(lParam, 24, "UInt")
     if stage = 1
         return 0x20                                                            ; CDRF_NOTIFYITEMDRAW
@@ -23958,6 +23977,204 @@ V33_OnWmNotify(wParam, lParam, msg, hwnd) {
     if old
         DllCall("SelectObject", "Ptr", hdc, "Ptr", old)
     return 0x4                                                                 ; CDRF_SKIPDEFAULT
+}
+
+; ----------------------------------------------------------------------------
+; V33 item C: frozen first columns. When the grid is scrolled right so that the # column is off screen, a narrow second list
+;   (s.GridFreeze, a mirror: # and Action, same rows) sits at the grid's left edge and follows the grid's vertical scroll and selection.
+;   A timer (120 ms) keeps it in step; it is not in s.Ctl.
+; ----------------------------------------------------------------------------
+
+; @summary Builds the frozen pane (hidden) and starts its timer. Called from V30_Build.
+; @tags freeze, grid, gui, v33
+V33_BuildFreeze(g) {
+    s := VMB()
+    s.GridFreeze := g.AddListView("x10 y40 w200 h300 Grid -Multi -E0x200 +LV0x10000 Hidden", ["#", "Action"])
+    s.GridFreeze.OnEvent("Click", V33_OnFreezeClick)
+    s.GridFreeze.OnNotify(-12, V33_OnFreezeDraw)
+    V33_ApplyFreezeFont()
+    OnMessage(0x20A, V33_OnWmWheel)                            ; the wheel over the pane scrolls the grid
+    SetTimer(V33_FreezeTick, 120)
+}
+
+; @summary The pane uses the grid's font (same row height, so the rows line up).
+; @tags freeze, grid, gui, v33
+V33_ApplyFreezeFont() {
+    s := VMB()
+    if !s.GridFreeze
+        return
+    s.GridFreeze.SetFont("s" . V29_ZoomFont(9, s.GridZoom), "MS Shell Dlg 2")
+    s.GridFreeze.SetFont(, "Segoe UI")
+}
+
+; @summary The right-click menu entry "Freeze # and Action": turns the pane on / off (kept in the ini).
+; @tags freeze, grid, v33
+V33_ToggleFreeze(*) {
+    s := VMB()
+    s.Freeze := !s.Freeze
+    try IniWrite(s.Freeze ? 1 : 0, s.Ini, "V33", "Freeze")
+    V33_FreezeTick(true)
+    VMB_Status(s.Freeze ? "# and Action stay in view when the grid is scrolled sideways." : "The # and Action columns scroll with the rest.")
+}
+
+; @summary Is the # column completely scrolled out of view on the left? (False with no rows, or a hidden # column.)
+; @returns Boolean
+; @tags freeze, grid, v33
+V33_HashOff() {
+    s := VMB()
+    if !s.GridLV || s.GridLV.GetCount() < 1
+        return false
+    p := V29_CursorRect(1, V33_ColOf("num"))
+    return IsObject(p) && p.R <= 0
+}
+
+; @summary Should the pane show now? Pure rule: on in the ini, Steps grid, rows, the # column scrolled off, the cell editor closed.
+; @returns Boolean
+; @tags freeze, v33
+V33_FreezeWanted(on, gridView, steps, rows, hashOff, editing, width) => on && gridView && steps && rows > 0 && hashOff && !editing && width > 0
+
+; @summary Called by the timer (and after a refill / layout): shows, places, fills and syncs the pane, or hides it.
+; @tags freeze, grid, gui, v33
+V33_FreezeTick(force := false) {
+    s := VMB()
+    fz := s.GridFreeze
+    if !fz || !s.GridLV || !s.Gui
+        return
+    try {
+        iNum := V33_ColOf("num"), iAct := V33_ColOf("action")
+        wNum := SendMessage(0x101D, iNum - 1, 0, s.GridLV), wAct := SendMessage(0x101D, iAct - 1, 0, s.GridLV)
+        vis := DllCall("IsWindowVisible", "Ptr", s.GridLV.Hwnd) && s.View = "grid" && s.Sheet = "steps"
+        want := vis && V33_FreezeWanted(s.Freeze, true, true, s.GridLV.GetCount(), V33_HashOff(), s.CellOn, wNum + wAct)
+        if !want {
+            if s.FrzShown {
+                fz.Visible := false
+                s.FrzShown := false
+            }
+            return
+        }
+        f := 96 / A_ScreenDPI
+        cl := Buffer(16, 0)
+        DllCall("GetClientRect", "Ptr", s.GridLV.Hwnd, "Ptr", cl)
+        pt := Buffer(8, 0)
+        DllCall("MapWindowPoints", "Ptr", s.GridLV.Hwnd, "Ptr", s.Gui.Hwnd, "Ptr", pt, "UInt", 1)
+        x := Round(NumGet(pt, 0, "Int") * f), y := Round(NumGet(pt, 4, "Int") * f)
+        w := Max(10, Round((wNum + wAct) * f)), h := Max(20, Round(NumGet(cl, 12, "Int") * f))
+        sig := x . "," . y . "," . w . "," . h . "," . wNum . "," . wAct
+        if sig != s.FrzSig || force || !s.FrzShown {
+            s.FrzSig := sig
+            fz.Move(x, y, w, h)
+            if SendMessage(0x101D, 0, 0, fz) != wNum
+                fz.ModifyCol(1, wNum)
+            if SendMessage(0x101D, 1, 0, fz) != wAct
+                fz.ModifyCol(2, wAct)
+        }
+        if s.FrzDirty || fz.GetCount() != s.GridLV.GetCount() {
+            V33_FreezeFill(iNum, iAct, wNum, wAct)
+            s.FrzDirty := false
+        }
+        if !s.FrzShown {
+            fz.Visible := true
+            DllCall("SetWindowPos", "Ptr", fz.Hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x13)      ; on top of the grid, no move / size / activate
+            s.FrzShown := true
+        }
+        DllCall("ShowScrollBar", "Ptr", fz.Hwnd, "Int", 3, "Int", 0)                     ; the pane has no scroll bars: the grid scrolls it
+        V33_FreezeSync()
+    } catch as e {
+        s.FrzErr := e.Message
+    }
+}
+
+; @summary Fills the pane with the grid's # and Action texts (the same rows, the same order) and sets its two column widths.
+; @tags freeze, grid, gui, v33
+V33_FreezeFill(iNum, iAct, wNum, wAct) {
+    s := VMB()
+    fz := s.GridFreeze
+    fz.Opt("-Redraw")
+    fz.Delete()
+    Loop s.GridLV.GetCount()
+        fz.Add("", s.GridLV.GetText(A_Index, iNum), s.GridLV.GetText(A_Index, iAct))
+    fz.ModifyCol(1, wNum)
+    fz.ModifyCol(2, wAct)
+    fz.Opt("+Redraw")
+    s.FrzSel := 0
+}
+
+; @summary Puts the pane's first visible row and selected row where the grid's are (same top index; the row height is read from the list).
+; @tags freeze, grid, v33
+V33_FreezeSync() {
+    s := VMB()
+    fz := s.GridFreeze
+    sel := s.GridLV.GetNext(0)
+    if sel != s.FrzSel || fz.GetNext(0) != sel {
+        s.FrzSync := true
+        try {
+            if sel
+                fz.Modify(sel, "Select")
+            else
+                fz.Modify(0, "-Select")
+        }
+        s.FrzSync := false
+        s.FrzSel := sel
+    }
+    top := SendMessage(0x1027, 0, 0, s.GridLV)                   ; LVM_GETTOPINDEX
+    ftop := SendMessage(0x1027, 0, 0, fz)
+    if top != ftop {
+        rc := Buffer(16, 0)
+        NumPut("Int", 0, rc)                                       ; LVIR_BOUNDS
+        if SendMessage(0x100E, 0, rc.Ptr, fz)                      ; LVM_GETITEMRECT of item 0: its height is the row height
+            SendMessage(0x1014, 0, (top - ftop) * (NumGet(rc, 12, "Int") - NumGet(rc, 4, "Int")), fz)      ; LVM_SCROLL
+    }
+}
+
+; @summary A click on a row of the pane: the same row is selected in the grid (and the clicked column becomes the current cell); the grid gets the keyboard.
+; @tags freeze, grid, gui, v33
+V33_OnFreezeClick(lv, row) {
+    s := VMB()
+    if !row || row > s.GridLV.GetCount()
+        return
+    hit := V30_HitCell(lv)
+    if hit.Row = row && hit.Col >= 1 && hit.Col <= 2
+        s.GridCol := hit.Col = 1 ? V33_ColOf("num") : V33_ColOf("action")
+    s.GridRange := 0
+    try s.GridLV.Modify(row, "Select Focus Vis")
+    V27_OnSelect(s.GridLV, row, true)
+    s.GridLV.Focus()
+    V33_Repaint()
+    V28_CellStatus(row)
+}
+
+; @summary WM_MOUSEWHEEL over the pane: forwarded to the grid (the pane has no scroll bars).
+; @tags freeze, grid, v33
+V33_OnWmWheel(wParam, lParam, msg, hwnd) {
+    s := VMB()
+    if s.GridFreeze && s.GridLV && hwnd = s.GridFreeze.Hwnd {
+        PostMessage(0x20A, wParam, lParam, , "ahk_id " . s.GridLV.Hwnd)
+        return 0
+    }
+}
+
+; @summary NM_CUSTOMDRAW of the pane: with the Excel look the # column is grey and the selected row light grey-green, like the grid.
+; @tags freeze, grid, gui, v33
+V33_OnFreezeDraw(ctl, lParam) {
+    s := VMB()
+    look := IsObject(s.V33C) ? s.V33C : V33_LookBgr()
+    if !look.On
+        return 0
+    stage := NumGet(lParam, 24, "UInt")
+    if stage = 1 || stage = 0x10001
+        return 0x20
+    if stage = 0x30001 {
+        row := NumGet(lParam, 56, "Ptr") + 1
+        sub := NumGet(lParam, 88, "Int")
+        NumPut("UInt", 0, lParam, 80)
+        NumPut("UInt", sub = 0 ? look.RowHead : 0xFFFFFF, lParam, 84)
+        if row = s.GridLV.GetNext(0) {
+            NumPut("UInt", NumGet(lParam, 64, "UInt") & ~1, lParam, 64)
+            NumPut("UInt", sub = 0 ? look.RowHead : look.Sel, lParam, 84)
+        }
+        return 0x2
+    }
+    return 0
 }
 
 ; ==== V33 END (new V33 functions are added above this line)
@@ -26035,6 +26252,11 @@ V4_SelfTest(path) {
         check("V33 fill right: left cell of each row into the rest", v33F.Cells.Length . "|" . v33F.Cells[1].SrcKey . v33F.Cells[1].Key . "|" . v33F.Cells[4].Row . v33F.Cells[4].Key, "4|actionwait|3note")
         check("V33 fill: one row down or one column right fills nothing", V33_PlanFill({rows: [2, 2], keys: ["a", "b"]}, "down").Cells.Length . V33_PlanFill({rows: [2, 5], keys: ["a"]}, "right").Cells.Length, "00")
         check("V33 sentences", V33_DoneText("Pasted", 9, 2) . "|" . V33_DoneText("Cleared", 1, 0) . "|" . V33_DoneText("Pasted", 3, 0, 2), "Pasted 9 cells, 2 could not take the value.|Cleared 1 cell.|Pasted 3 cells, 2 fell outside the sheet.")
+        ; ---- V33 item C
+        check("V33 freeze rule: shown only when on, in the Steps grid, with rows, # scrolled off, not editing, with width",
+            V33_FreezeWanted(true, true, true, 5, true, false, 140) . V33_FreezeWanted(false, true, true, 5, true, false, 140) . V33_FreezeWanted(true, false, true, 5, true, false, 140)
+            . V33_FreezeWanted(true, true, false, 5, true, false, 140) . V33_FreezeWanted(true, true, true, 0, true, false, 140) . V33_FreezeWanted(true, true, true, 5, false, false, 140)
+            . V33_FreezeWanted(true, true, true, 5, true, true, 140) . V33_FreezeWanted(true, true, true, 5, true, false, 0), "10000000")
         ; ---- V33 item D
         check("V33 look: RGB to COLORREF, the colours exist in both looks", V33_Bgr(0xF3F3F3) . "|" . V33_Bgr(0x112233) . "|" . V33_Look(1)["Sel"] . "|" . V33_Look(0)["On"] . "|" . V33_Look(1)["HeadBg"], "15987699|3351057|14938086|0|15987699")
 
