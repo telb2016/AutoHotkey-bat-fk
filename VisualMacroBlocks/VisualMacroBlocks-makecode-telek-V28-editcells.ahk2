@@ -16909,6 +16909,10 @@ V28_Finish(refocus := true) {
         V28_Cancel(refocus)
 }
 
+; @summary True when two cell texts are exactly equal (case counts: abc -> ABC is a change; AutoHotkey's = ignores case).
+; @tags grid, edit, v28
+V28_SameText(a, b) => String(a) == String(b)
+
 ; @summary Changes a step by a plan: snapshot (Ctrl+Z undoes it), apply, Dirty, refresh keeping sort / filter and the selection, autosave.
 ; @tags grid, edit, gui, v28
 V28_Do(node, plan, message) {
@@ -16945,7 +16949,7 @@ V28_Commit(refocus := true) {
     }
     s.CellLast := node
     V28_Hide(refocus)
-    if input = s.CellOrig
+    if V28_SameText(input, s.CellOrig)
         return true
     title := ""
     for col in V27_Columns()
@@ -17119,7 +17123,7 @@ V28_CopyAbove() {
     plan := V28_Plan(node, col.Key, V28_EditText(above, col.Key))
     if !plan.Ok
         return VMB_Status("The cell above does not fit this step: " . plan.Error)
-    if V28_EditText(above, col.Key) = V28_EditText(node, col.Key)
+    if V28_SameText(V28_EditText(above, col.Key), V28_EditText(node, col.Key))
         return VMB_Status("The cell is already the same as the one above.")
     V28_Do(node, plan, col.Title . " copied from the row above. Ctrl+Z undoes it.")
 }
@@ -18564,6 +18568,9 @@ V4_SelfTest(path) {
         check("V28 copy above: a raw-keys cell is valid for another Press step", V28_ApplyCell(v28N, "text", V28_EditText(Map("type", "keys", "keys", "^{c}"), "text")).Ok . v28N["keys"], "1^{c}")
         v28Far := Map("type", "click", "scrX", 5, "scrY", 6, "geo", Map("cx", 10, "cy", 10, "cw", 100, "ch", 100))
         check("V28 copy above: a value outside this step's window is refused, step unchanged", V28_ApplyCell(v28Far, "x", "250").Ok . v28Far["geo"]["cx"], "010")
+        check("V28 same text: a change of case only is a change", V28_SameText("abc", "ABC") . V28_SameText("abc", "abc"), "01")
+        v28Case := Map("type", "text", "text", "abc")
+        check("V28 case-only edit is applied to a Type step", V28_ApplyCell(v28Case, "text", "ABC").Ok . v28Case["text"], "1ABC")
         check("V28 typed key: no editor open, so nothing to close", V28_TypeKey(65) . VMB().CellOn, "0")
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
