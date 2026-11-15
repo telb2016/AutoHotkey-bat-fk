@@ -332,7 +332,7 @@ VMB() {
         Sheet: "steps", PreviewRow: 1, RunBar: Map(), SheetTabs: Map(), ListBar: Map(), ListLV: 0, ListUndo: [], ListRedo: [], ListResult: Map(),
         GridMark: Map(), RuleDlg: 0, ListEditOn: false, ListEditRow: 0, ListEditLvRow: 0, ListEditCol: 3, ListEditOrig: "", ListCol: 3,
         ValLV: 0, ValBar: Map(), ValUndo: [], ValRedo: [], ValEditOn: false, ValEditRow: 0, ValEditCol: 1, ValEditOrig: "", ValEditPick: false, ValCol: 1,
-        GridRange: 0, V32Last: 0, V32Rows: Map(), V32Asked: false, V32NoAsk: false, Picks: Map(), FindBar: Map(), FindOn: false, FindHits: [], FindAt: 0, FindSheet: ""}
+        GridRange: 0, GridBands: [], Bands: true, V32Last: 0, V32Rows: Map(), V32Asked: false, V32NoAsk: false, Picks: Map(), FindBar: Map(), FindOn: false, FindHits: [], FindAt: 0, FindSheet: ""}
     return s
 }
 
@@ -16164,6 +16164,7 @@ V27_Rows(blocks, settings, state) {
 V27_BuildGrid(g) {
     s := VMB(), c := s.Ctl
     s.View := IniRead(s.Ini, "V27", "View", "grid") = "list" ? "list" : "grid"
+    s.Bands := IniRead(s.Ini, "V32", "Bands", "1") != "0"           ; V32: band rows for hand-made loop / If blocks (ini [V32] Bands=0 switches them off)
     c["ViewList"] := g.AddButton("x10 y10 w46 h20", "List")
     c["ViewGrid"] := g.AddButton("x+4 yp w46 h20", "Grid")
     c["ViewList"].OnEvent("Click", (*) => V27_SetView("list"))
@@ -16294,6 +16295,7 @@ V27_FillGrid(rows := "") {
     keep := V27_SelectedNode()
     if !IsObject(rows) {
         s.GridAll := V27_Rows(s.Macro["blocks"], s.Macro["settings"], V27_State())
+        s.GridBands := V32_MakeBands(s.Macro["blocks"], s.GridAll)     ; V32: band rows for hand-made loop / If blocks (step order only)
         V27_BarLists()
         rows := V27_ViewRows()          ; sort / filter are only a view: the rows are the same, in another order or fewer
     }
@@ -16308,9 +16310,11 @@ V27_FillGrid(rows := "") {
             cells.Push(r.Get(col.Key, "–"))
         n := lv.Add("", cells*)
         s.GridNodes[n] := r.Node
-        s.GridRowOf[r.Node] := n
-        if (r.HasOwnProp("Grey") && r.Grey) || (r.HasOwnProp("Chain") && r.Chain)      ; V31: greyed (left out for the preview row) / chain colour bar
-            s.GridMark[n] := {Grey: r.HasOwnProp("Grey") && r.Grey, Chain: r.HasOwnProp("Chain") ? r.Chain : 0}
+        if IsObject(r.Node) && !s.GridRowOf.Has(r.Node)
+            s.GridRowOf[r.Node] := n
+        isBand := r.HasOwnProp("Band") && r.Band
+        if (r.HasOwnProp("Grey") && r.Grey) || (r.HasOwnProp("Chain") && r.Chain) || isBand      ; V31: greyed (left out for the preview row) / chain colour bar; V32: band row
+            s.GridMark[n] := {Grey: r.HasOwnProp("Grey") && r.Grey, Chain: r.HasOwnProp("Chain") ? r.Chain : 0, Band: isBand}
     }
     if rows.Length && !s.GridSized {
         s.GridSized := true
@@ -16470,6 +16474,8 @@ V27_SortRows(rows, key, desc, isNum) {
 ; @tags grid, sort, filter, v27
 V27_ViewRows() {
     s := VMB()
+    if V32_BandsOn()
+        return s.GridBands                                      ; V32: step order, no filter: loop / If blocks as band rows
     rows := s.GridAll
     if s.FilterProg != ""
         rows := V27_PickRows(rows, "app", s.FilterProg)
@@ -16504,8 +16510,12 @@ V27_SortMarks() {
 V27_ViewStatus() {
     s := VMB()
     parts := []
-    if s.GridRows.Length != s.GridAll.Length
-        parts.Push("Showing " . s.GridRows.Length . " of " . s.GridAll.Length . " steps")
+    shownSteps := 0
+    for r in s.GridRows
+        if !(r.HasOwnProp("Band") && r.Band)
+            shownSteps += 1
+    if shownSteps != s.GridAll.Length
+        parts.Push("Showing " . shownSteps . " of " . s.GridAll.Length . " steps")
     if s.Picks.Count {
         titles := []
         for col in V27_Columns()
@@ -16855,7 +16865,7 @@ V28_NotEditableText() => "This cell is worked out from the step. Double-click op
 ; @returns "" | "text" | Array
 ; @tags grid, edit, v28
 V28_Editable(node, key) {
-    if !(node is Map)
+    if !(node is Map) || VMF_IsContainer(node)          ; V32: a loop / If band row is not editable in the grid
         return ""
     t := node.Get("type", "")
     mouse := t = "click" || t = "drag"
@@ -17906,6 +17916,11 @@ V29_OnCustomDraw(ctl, lParam) {
             ret |= 0x2
         }
         if mark {
+            if mark.Band && row != s.CurCell {
+                NumPut("UInt", 0x64381F, lParam, 80)             ; V32: band row: dark blue text on a light blue-grey ground
+                NumPut("UInt", 0xF0E6DD, lParam, 84)
+                ret |= 0x2
+            }
             if mark.Grey && row != s.CurCell {
                 NumPut("UInt", 0x909090, lParam, 80)             ; clrText: grey
                 ret |= 0x2                                       ; CDRF_NEWFONT
@@ -21650,7 +21665,7 @@ V32_PlainSentence() => "Sort and filter are on: switch to Step order to move row
 ; @tags rows, grid, v32
 V32_Plain() {
     s := VMB()
-    return V32_ViewIsPlain(s.SortKey, s.FilterProg, s.FilterAct, s.FilterQ, s.Picks.Count) && s.GridRows.Length = s.GridAll.Length
+    return V32_ViewIsPlain(s.SortKey, s.FilterProg, s.FilterAct, s.FilterQ, s.Picks.Count)
 }
 
 ; @summary Grid rows (a Map row -> 1) of the selected row range, or an empty Map when there is no range (or the view is not plain).
@@ -21680,7 +21695,8 @@ V32_Targets() {
     rr := V32_RangeRows()
     if rr.Count {
         for row in V32_RowList(rr)
-            nodes.Push(s.GridNodes[row])
+            if IsObject(nd := s.GridNodes.Get(row, 0))
+                nodes.Push(nd)
         return nodes
     }
     row := s.GridLV.GetNext(0)
@@ -21894,6 +21910,10 @@ V32_Extend(dir) {
         return
     anchor := valid ? r.A : s.GridNodes[curRow]
     newRow := Min(Max(curRow + dir, 1), s.GridRows.Length)
+    while newRow > 1 && newRow < s.GridRows.Length && !IsObject(s.GridNodes.Get(newRow, 0))      ; an Else band has no step: step over it
+        newRow += dir
+    if !IsObject(s.GridNodes.Get(newRow, 0))
+        return
     s.GridRange := {A: anchor, C: s.GridNodes[newRow]}
     V32_SelectNode(s.GridNodes[newRow])
     n := V32_RangeRows().Count
@@ -22495,6 +22515,101 @@ V32_HeaderClick(col) {
         return true
     }
     return false
+}
+
+; ----------------------------------------------------------------------------
+; V32 item D: hand-made loop / If blocks as shaded band rows in the Steps grid (shown in step order only, no sort, no filter)
+; ----------------------------------------------------------------------------
+
+; @summary Does the macro have loop / If blocks at the top level (and so, maybe nested ones)?
+; @returns Boolean
+; @tags bands, grid, v32
+V32_HasBlocks(blocks) {
+    if blocks is Array
+        for node in blocks
+            if node is Map && VMF_IsContainer(node)
+                return true
+    return false
+}
+
+; @summary Two spaces per level (the indent of a step in the Action column).
+; @returns String
+; @tags bands, grid, v32
+V32_Pad(depth) {
+    pad := ""
+    Loop Max(0, depth) * 2
+        pad .= " "
+    return pad
+}
+
+; @summary The text of a band row: the block's own line for its first list ("Repeat 5 times", "If ..."), "Else if ..." and "Else" for the others of an If.
+; @returns String
+; @tags bands, grid, v32
+V32_BandText(node, i) {
+    if node.Get("type", "") != "if" || i = 1
+        return V27_BlockLabel(node)
+    alts := node.Get("elifs", "")
+    n := alts is Array ? alts.Length : 0
+    return i <= 1 + n ? "Else if " . V21_CondText(alts[i - 1]) : "Else"
+}
+
+; @summary One band row: every cell empty except Action (indented). node = the block for its first band row, 0 for an Else / Else if band.
+; @returns Map (with .Node, .Band, .Grey, .Chain)
+; @tags bands, grid, v32
+V32_BandRow(text, depth, node) {
+    row := Map()
+    for col in V27_Columns()
+        row[col.Key] := ""
+    row["action"] := V32_Pad(depth) . text
+    row.Node := node, row.Band := true, row.Grey := false, row.Chain := 0
+    return row
+}
+
+; @summary Walks the blocks and puts a band row before each block's steps (an Else / Else if list gets its own band when it has steps).
+;          Step rows are copies of the real rows with the Action indented two spaces per level.
+; @tags bands, grid, v32
+V32_BandWalk(list, depth, byNode, out) {
+    for node in list {
+        if !(node is Map)
+            continue
+        if VMF_IsContainer(node) {
+            for i, kid in VMF_Children(node) {
+                if i > 1 && !kid.Length
+                    continue
+                out.Push(V32_BandRow(V32_BandText(node, i), depth, i = 1 ? node : 0))
+                V32_BandWalk(kid, depth + 1, byNode, out)
+            }
+        } else if byNode.Has(node) {
+            r := byNode[node]
+            c := r.Clone()
+            c.Node := r.Node
+            c.Grey := r.HasOwnProp("Grey") && r.Grey, c.Chain := r.HasOwnProp("Chain") ? r.Chain : 0, c.Band := false
+            c["action"] := V32_Pad(depth) . String(r.Get("action", ""))
+            out.Push(c)
+        }
+    }
+}
+
+; @summary The rows the grid shows in step order when the macro has loop / If blocks: band rows and indented step rows. [] when it has none.
+; @returns Array of rows
+; @tags bands, grid, v32
+V32_MakeBands(blocks, stepRows) {
+    if !V32_HasBlocks(blocks)
+        return []
+    byNode := Map()
+    for r in stepRows
+        byNode[r.Node] := r
+    out := []
+    V32_BandWalk(blocks, 0, byNode, out)
+    return out
+}
+
+; @summary Are band rows shown now? Only in step order (no sort) and with no filter or header pick.
+; @returns Boolean
+; @tags bands, grid, v32
+V32_BandsOn() {
+    s := VMB()
+    return s.Bands && s.GridBands.Length > 0 && s.SortKey = "" && !V27_FilterOn()
 }
 
 ; ==== V32 END (new V32 functions are added above this line)
@@ -23764,6 +23879,7 @@ V4_SelfTest(path) {
         v27S2.TV := 0, v27S2.GridSized := false
         v27S2.Macro := VMF_NewMacro()
         v27S2.Macro["blocks"] := v27Blocks
+        v27OldBands := v27S2.Bands, v27S2.Bands := false        ; (the V27 checks are about the plain rows; the V32 band rows are checked below)
         V27_FillGrid()
         check("V27 grid: one list row per step", v27S2.GridLV.GetCount(), 3)
         check("V27 grid: a column per cell kind", v27S2.GridLV.GetCount("Col"), v27Cols.Length)
@@ -23773,6 +23889,13 @@ V4_SelfTest(path) {
         check("V27 grid: no empty cell", v27S2.GridLV.GetText(2, v27Cols.Length) != "" && v27S2.GridLV.GetText(2, 8) != "", true)
         V27_FillGrid([v27S2.GridRows[3], v27S2.GridRows[1]])
         check("V27 grid: another row array is shown as given (for sort / filter)", v27S2.GridLV.GetCount() . v27S2.GridNodes[1]["type"] . v27S2.GridNodes[2]["type"], "2keysclick")
+        v27S2.Bands := true
+        V27_FillGrid()
+        check("V32 grid: with band rows the same macro shows its Repeat as a shaded band row and indents the steps", v27S2.GridLV.GetCount() . "|" . Trim(v27S2.GridLV.GetText(1, 6)) . "|" . v27S2.GridLV.GetText(2, 6) . "|" . v27S2.GridLV.GetText(4, 6) . "|" . IsObject(v27S2.GridNodes[1]) . "|" . (v27S2.GridMark.Has(1) && v27S2.GridMark[1].Band), "4|Repeat 5 times|  Click|Press|1|1")
+        v27S2.SortKey := "app"
+        V27_FillGrid()
+        check("V32 grid: sorted by a column the band rows are hidden", v27S2.GridLV.GetCount() . "|" . v27S2.GridMark.Count, "3|0")
+        v27S2.SortKey := "", v27S2.Bands := v27OldBands
         v27S2.GridLV := v27OldLV, v27S2.Macro := v27OldMacro, v27S2.TV := v27OldTV, v27S2.GridSized := v27OldSized
         v27S2.GridRows := [], v27S2.GridNodes := Map(), v27S2.GridRowOf := Map()
         v27Gui.Destroy()
@@ -24474,6 +24597,26 @@ V4_SelfTest(path) {
         check("V32 header: arrow zone is the right 18 px, a click elsewhere sorts", V32_HitArrow(95, 0, 100, 18) . V32_HitArrow(70, 0, 100, 18) . V32_HitArrow(100, 0, 100, 18) . V32_HitArrow(85, 0, 100, 18), "1001")
         check("V32 header: a narrow column gives the arrow at most half", V32_HitArrow(10, 0, 40, 30) . V32_HitArrow(25, 0, 40, 30), "01")
         check("V32 header: titles (arrow, sort triangle, filtered mark)", V32_HeadTitle("Program", "", false) . "|" . V32_HeadTitle("Program", " ▲", false) . "|" . V32_HeadTitle("Program", "", true), "Program ▾|Program ▲ ▾|Program ▼=")
+
+        v32B := [Map("type", "keys", "keys", "{Home}"), Map("type", "repeat", "count", 2, "body", [Map("type", "text", "text", "a"), Map("type", "if", "cond", "window", "body", [Map("type", "text", "text", "deep")], "elifs", [], "else", [Map("type", "keys", "keys", "{Tab}")])]), Map("type", "text", "text", "end")]
+        v32S := Map("steady", 1, "verifyClicks", 1, "settings", Map())
+        v32Rows := V27_Rows(v32B, v32S, Map())
+        v32Band := V32_MakeBands(v32B, v32Rows)
+        v32Act := ""
+        for v32R2 in v32Band
+            v32Act .= (v32R2.Band ? "[" : "|") . v32R2["action"] . "|" . (IsObject(v32R2.Node) ? "N" : "0") . ";"
+        check("V32 bands: a macro without blocks has none", V32_MakeBands([Map("type", "keys", "keys", "x")], []).Length, 0)
+        v32Flags := "", v32Ind := ""
+        for v32R2 in v32Band {
+            v32Flags .= v32R2.Band ? "1" : "0"
+            v32Ind .= (StrLen(v32R2["action"]) - StrLen(LTrim(v32R2["action"]))) . ","
+        }
+        check("V32 bands: band rows and steps in order (8 rows: step, Repeat, a, If, deep, Else, Tab, end)", v32Band.Length . "|" . v32Flags, "8|01010100")
+        check("V32 bands: two spaces per level in the Action column", v32Ind, "0,0,2,2,4,2,4,0,")
+        check("V32 bands: the Repeat and If bands hold their block, the Else band holds none", IsObject(v32Band[2].Node) . IsObject(v32Band[4].Node) . IsObject(v32Band[6].Node), "110")
+        check("V32 bands: the first band says Repeat 2 times, the If band names its condition, the else band says Else", Trim(v32Band[2]["action"]) . "|" . (InStr(v32Band[4]["action"], "If ") > 0) . "|" . Trim(v32Band[6]["action"]), "Repeat 2 times|1|Else")
+        check("V32 bands: band rows have empty cells except Action; the real rows keep their plain Action", v32Band[2]["text"] . v32Band[2]["num"] . "|" . v32Rows[1]["action"], "|Press")
+        check("V32 bands: the shared rows are copied, not changed", v32Rows[2]["action"], "Type")
 
         player := V4_PlayerSource(source, macro)
         check("One-file player contains embedded macro", InStr(player, 'text .= "') > 0)
