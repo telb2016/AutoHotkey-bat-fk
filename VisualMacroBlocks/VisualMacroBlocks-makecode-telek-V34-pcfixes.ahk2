@@ -227,10 +227,10 @@ F2::VMB_EditSelected()
 ^e::VMB_ToggleDisabled()
 ^a::VMB_CheckAll()
 #HotIf V28_EditorFocused()
-Enter::V28_Enter("down")
-NumpadEnter::V28_Enter("down")
-Tab::V28_Enter("tab")
-+Tab::V28_Enter("back")
+Enter::V34_Later(V28_Enter.Bind("down"), V28_EditorFocused)
+NumpadEnter::V34_Later(V28_Enter.Bind("down"), V28_EditorFocused)
+Tab::V34_Later(V28_Enter.Bind("tab"), V28_EditorFocused)
++Tab::V34_Later(V28_Enter.Bind("back"), V28_EditorFocused)
 Esc::V28_EscKey()
 #HotIf V27_GridFocused()
 Home::V29_Jump("first")
@@ -271,10 +271,10 @@ Right::V28_MoveCol(1)
 ^+=::V32_Insert("text", false)
 ^+NumpadAdd::V32_Insert("text", false)
 #HotIf V30_ListEditFocused()
-Enter::V30_ListEnter("down")
-NumpadEnter::V30_ListEnter("down")
-Tab::V30_ListEnter("tab")
-+Tab::V30_ListEnter("back")
+Enter::V34_Later(V30_ListEnter.Bind("down"), V30_ListEditFocused)
+NumpadEnter::V34_Later(V30_ListEnter.Bind("down"), V30_ListEditFocused)
+Tab::V34_Later(V30_ListEnter.Bind("tab"), V30_ListEditFocused)
++Tab::V34_Later(V30_ListEnter.Bind("back"), V30_ListEditFocused)
 Esc::(V30_ListCancel(), VMB_Status("Not changed."))
 #HotIf V30_ListFocused()
 ^v::V33_SPaste("list")
@@ -300,10 +300,10 @@ Delete::V33_SDelete("list")
 Left::V30_MoveCol(-1)
 Right::V30_MoveCol(1)
 #HotIf V31_ValEditFocused()
-Enter::V31_ValEnter("down")
-NumpadEnter::V31_ValEnter("down")
-Tab::V31_ValEnter("tab")
-+Tab::V31_ValEnter("back")
+Enter::V34_Later(V31_ValEnter.Bind("down"), V31_ValEditFocused)
+NumpadEnter::V34_Later(V31_ValEnter.Bind("down"), V31_ValEditFocused)
+Tab::V34_Later(V31_ValEnter.Bind("tab"), V31_ValEditFocused)
++Tab::V34_Later(V31_ValEnter.Bind("back"), V31_ValEditFocused)
 Esc::(V31_ValCancel(), VMB_Status("Not changed."))
 #HotIf V31_ValFocused()
 ^c::V33_SCopy("values")
@@ -24410,6 +24410,23 @@ V34_ShowUnder(m, ctl) {
 ; @tags macro, playback, preflight, v34
 V34_PreflightGate(onlySelected, startMode, preflightOn) => !onlySelected && startMode = "run" && preflightOn ? true : false
 
+; ---- V34 finding 6: Enter / Tab in a cell editor must see the last typed characters ------------------------------------
+
+; @summary Runs a hotkey's work one message-loop turn later. A hotkey's message is queued ahead of keyboard input that is still
+;          waiting, so a fast typist, a scanner or a text expander ("there" + Enter at once) had Enter read the edit box before
+;          its last characters arrived. A timer only fires after the queued key messages are handled. guard (optional) = a
+;          function that must still say yes when the work runs (the editor is still the focus), else it is skipped.
+; @tags gui, edit, keyboard, v34
+V34_Later(work, guard := 0) {
+    later() {
+        if guard && !guard()
+            return
+        Sleep(-1)                       ; handle anything still waiting first
+        work()
+    }
+    SetTimer(later, -1)
+}
+
 ; ==== V34 END (new V34 functions are added above this line)
 
 ; ============================================================================
@@ -26586,6 +26603,14 @@ V4_SelfTest(path) {
         check("V34 preflight gate: a selected block only", V34_PreflightGate(true, "run", 1), false)
         check("V34 preflight gate: run-to / step modes", V34_PreflightGate(false, "step", 1), false)
         check("V34 preflight: a closed program is reported without Steady", V24_Preflight([Map("type", "click", "win", Map("exe", "notepad.exe"))], Map(), Map(), "").Length, 1)
+        v34N := 0
+        V34_Later(() => v34N += 1)
+        check("V34 later: the work does not run inside the hotkey", v34N, 0)
+        Sleep(60)
+        check("V34 later: it runs once afterwards", v34N, 1)
+        V34_Later(() => v34N += 10, () => false)
+        Sleep(60)
+        check("V34 later: a guard that says no skips it", v34N, 1)
         check("V34 steady runner: a settle wait is only for steady input steps", V34_FloorMs(V18_Steady(V4Runner(VMF_NewMacro(), {})), VMF_NewMacro()["settings"]), 120)
     } catch as err {
         failures += 1
