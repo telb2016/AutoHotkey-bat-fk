@@ -1,4 +1,4 @@
-# PC test - one sheet for V19 to V29
+# PC test - one sheet for V19 to V30
 
 File: `VisualMacroBlocks-makecode-telek-V26-pccheck.ahk2`. This replaces the separate V21 / V22 / V23 / V24 / V25 checklists
 (those files stay in the folder, but you do not need them). Nothing here was ever run on a real Windows PC yet.
@@ -59,3 +59,18 @@ Open a macro with a click, a Type step and a Press step. The [Grid] button must 
 7. Zoom, move and hide something, close the editor window, open it again: zoom, widths, order and hidden columns are as you left them.
 8. Click **[List]**: the list looks and works as before; Ctrl + wheel / Ctrl + plus there still behave as before (the list zoom).
 9. While a macro plays or records, none of these keys do anything in the grid.
+
+## 6. List (V30 file: `VisualMacroBlocks-makecode-telek-V30-listsheet.ahk2`)
+
+Use a real program with a form (for example a web form or an app with two text boxes). The four steps are the same as in the help ("To do the same thing for many items").
+
+1. **Record it once** for the first item (for example type `Smith`, press Tab, type `250`, press Enter). In the grid the Type steps show `Smith` and `250`.
+2. In Excel copy three rows with column names in the first row (`Name`, `Amount`; `Smith 250`, `Jones 75`, `Lee 5`). In the macro click the **List** tab under the grid, then press **Ctrl+V** (or **Paste list**). The three rows appear, the column names are the header.
+3. A question asks whether the Type steps that typed `Smith` / `250` should use the list columns. Answer **Yes**. Click the **Steps** tab: the cells now read `=Name → "Smith"` and `=Amount → "250"`. Change **Preview row** (above the grid, right side): the quoted values change to row 2, row 3.
+4. Above the grid choose **for each row of the List (3 rows)** and press **Play**. The program gets Smith / 250, Jones / 75, Lee / 5, one after the other. The status bar says `3 rows: 3 done.`; the List tab shows `done` in the Result column.
+5. Save the macro and open the file in a text editor: it has a `list` and `runMode`, and **no** `foreach` / `repeat` block.
+6. Make one row fail (for example close the program for one row, or give a step something that cannot work): that row is skipped, the run goes on, the status bar says `... 1 skipped (row N).` and Result says `skipped: ...`.
+7. Choose **N times** with 3, put `=#` in a Type step (right-click the cell -> Use list column -> `# (the round number)`) and Play: it types 1, 2, 3.
+8. On the List tab double-click a cell, type, press Enter / Tab / Esc; Ctrl+Z undoes it; click a column name to rename it (Type steps that used the old name follow). Right-click the Text cell of a Type step: the menu offers *Use list column*, *Type fixed text...*.
+9. Open an old macro (no List): nothing looks different; the Run line says **once**. A macro with its own Repeat / For each blocks shows the note *This macro has its own loop blocks (see List view)* instead of the choices. Easy mode shows the Run line and the tabs too.
+10. Look at the **Repeats** column (to the right of Waits first): the first window steps say *once at start*, the rest *yes*. Try setting step 5 to *once at start* while step 4 says *yes*: a sentence refuses it.
