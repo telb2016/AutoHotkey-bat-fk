@@ -12880,7 +12880,8 @@ V17_EasyDesc(kind, fallback) {
 V17_EasyHelp(*) {
     MsgBox("RULES - THE EXCEL WAY"
         . "`nOnly when: type a rule such as  Status = On  to do a step only for some rows. Type  otherwise  on the next step for the"
-        . " other rows. If it fails: choose what happens when a step cannot be done."
+        . " other rows. If it fails: choose what happens when a step cannot be done. Values: names you can type as =name (the Values tab: a fixed text,"
+        . " ask at start, today's date, or a number that counts up); the Remember step keeps the clipboard or a text under a name."
         . "`n`nTO DO THE SAME THING FOR MANY ITEMS"
         . "`n1. Record it once for the first item.  2. Click the List tab and paste your items from Excel."
         . "`n3. Say Yes when asked to use the list columns.  4. Choose 'for each row of the List' and press Play."
@@ -21677,7 +21678,10 @@ V4_ExportPlayer(*) {
         MsgBox(err.Message, "V10 export failed", "Iconx")
 }
 V4_Help(*) {
-    MsgBox("NEW IN V31 (rules as columns):"
+    MsgBox("NEW IN V31.1 (Values): the Values tab (next to Steps and List) holds names you can use as =name in a Type step or in an Only when rule."
+        . " When = fixed / ask at start (one small form before step 1; Cancel stops the run) / today's date (Value = the format, MM/dd/yyyy) / counts up (starts at Value, +1 each round)."
+        . " Right-click a row -> Add step -> Remember clipboard as...: Remember clipboard as total, or Remember " . Chr(34) . "text" . Chr(34) . " as total."
+        . "`n`nNEW IN V31 (rules as columns):"
         . "`n• Only when: a rule such as  Status = On  or  Amount > 100  does a step only for some rows. otherwise (or otherwise, Amount > 50) on the next"
         . " steps = the other rows. Right-click the cell to build a rule by picking. If it fails: stop / skip this step / skip this row / try 3 times."
         . "`n• Right-click a row -> Add step: Type text, Press keys, Wait, Wait until window, Skip this row, Stop the run. A list run stops after 3 bad rows in a row."
