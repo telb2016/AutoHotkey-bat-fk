@@ -203,6 +203,8 @@ F2::VMB_EditSelected()
 ^d::VMB_Duplicate()
 ^e::VMB_ToggleDisabled()
 ^a::VMB_CheckAll()
+#HotIf V27_GridFocused()
+^c::V27_CopyRow()
 #HotIf VMB_EditorActive()
 ^+e::V17_ToggleEasy()
 ^l::V8_VarySelectedDialog()
@@ -15815,6 +15817,8 @@ V27_BuildGrid(g) {
     b["Clear"].OnEvent("Click", (*) => V27_ClearFilter())
     b["Reset"] := g.AddButton("x10 y10 w84 h22 Hidden", "Step order")
     b["Reset"].OnEvent("Click", (*) => V27_SortReset())
+    b["Copy"] := g.AddButton("x+4 yp w84 h22 Hidden", "Copy table")
+    b["Copy"].OnEvent("Click", (*) => V27_CopyTable())
     s.GridLV.OnEvent("ItemSelect", V27_OnSelect)
     s.GridLV.OnEvent("DoubleClick", V27_OnDoubleClick)
     s.GridLV.OnEvent("ContextMenu", V27_OnMenu)
@@ -16338,6 +16342,63 @@ V27_RunEnd() {
     }
     if s.View = "grid"
         V27_FillGrid()              ; rebuilds the drop-downs and selects the Program / Action choice again
+}
+
+; ----------------------------------------------------------------------------
+; V27 item E: copy to Excel
+; ----------------------------------------------------------------------------
+
+; @summary One cell as text for a tab-separated table: tabs and line breaks become a space.
+; @returns Text
+; @tags grid, copy, v27
+V27_TsvCell(v) => RegExReplace(String(v), "[\t\r\n]+", " ")
+
+; @summary Rows as tab-separated text (one line per row, lines joined with CR LF, no line break at the end), so it pastes
+;          into Excel as cells. header = true puts the column titles first.
+; @returns Text
+; @tags grid, copy, v27
+V27_Tsv(rows, columns, header := true) {
+    lines := []
+    if header {
+        t := []
+        for col in columns
+            t.Push(V27_TsvCell(col.Title))
+        lines.Push(V4_Join(t, "`t"))
+    }
+    for r in rows {
+        t := []
+        for col in columns
+            t.Push(V27_TsvCell(r.Get(col.Key, "")))
+        lines.Push(V4_Join(t, "`t"))
+    }
+    return V4_Join(lines, "`r`n")
+}
+
+; @summary "Copy table" button: the rows shown now (after sort / filter) with the header row, tab-separated, on the clipboard.
+; @tags grid, copy, v27
+V27_CopyTable() {
+    s := VMB()
+    A_Clipboard := V27_Tsv(s.GridRows, V27_Columns(), true)
+    VMB_Status("Copied " . s.GridRows.Length . " rows with the header row. Paste into Excel (Ctrl+V) - each value lands in its own cell.")
+}
+
+; @summary Ctrl+C in the grid: the selected row, tab-separated (no header row), on the clipboard.
+; @tags grid, copy, v27
+V27_CopyRow() {
+    s := VMB()
+    row := s.GridLV ? s.GridLV.GetNext(0) : 0
+    if !row || row > s.GridRows.Length
+        return
+    A_Clipboard := V27_Tsv([s.GridRows[row]], V27_Columns(), false)
+    VMB_Status("Copied the selected row. Paste into Excel (Ctrl+V).")
+}
+
+; @summary True while the grid has the keyboard focus (for Ctrl+C in the grid).
+; @tags grid, copy, v27
+V27_GridFocused(*) {
+    s := VMB()
+    return s.GridLV && s.Gui && s.View = "grid" && !VM_IsPlaying() && !VM_IsRecording() && WinActive("ahk_id " . s.Gui.Hwnd)
+        && DllCall("GetFocus", "Ptr") = s.GridLV.Hwnd
 }
 
 ; ============================================================================
@@ -17625,6 +17686,12 @@ V4_SelfTest(path) {
         check("V27 pick: exact program", V27_PickRows(v27F, "app", "CHROME").Length, 2)
         check("V27 distinct: no dash, first-seen order", V4_Join(V27_Distinct(v27F, "note"), "|"), "save it")
         check("V27 distinct: programs", V4_Join(V27_Distinct(v27F, "app"), "|"), "notepad|chrome")
+        ; V27 item E: copy to Excel
+        v27Tsv := V27_Tsv([Map("num", 1, "app", "note`tpad", "action", "Click`r`nagain"), Map("num", 2, "app", "–", "action", "")], [{Key: "num", Title: "#"}, {Key: "app", Title: "Program"}, {Key: "action", Title: "Action"}])
+        check("V27 tsv: header row first, tabs between cells, CR LF between rows", v27Tsv, "#`tProgram`tAction`r`n1`tnote pad`tClick again`r`n2`t–`t")
+        check("V27 tsv: without header", V27_Tsv([Map("num", 7, "app", "x")], [{Key: "num", Title: "#"}, {Key: "app", Title: "Program"}], false), "7`tx")
+        check("V27 tsv: no rows = header only", V27_Tsv([], [{Key: "num", Title: "#"}, {Key: "app", Title: "Program"}]), "#`tProgram")
+        check("V27 tsv: cell with no tab or line break left", RegExMatch(V27_TsvCell("a`tb`r`nc`nd"), "[`t`r`n]"), 0)
         ; V27 check this PC (scroll test in a helper program)
         check("V27 helper: has a list box and a multi-line text box", InStr(V27_ScrollHelperText(), "ListBox") > 0 && InStr(V27_ScrollHelperText(), "Multi") > 0, true)
         check("V27 helper: 300 rows and 300 lines", InStr(V27_ScrollHelperText(), "loop 300") > 0, true)
