@@ -23,8 +23,8 @@ developer: **do not change the script.** If something fails, record it and go on
 2. Never type real names, patient data or passwords. Use the made-up values given below (Smith, Jones, 250 ...).
 3. Do not open, play or change the owner's existing macros. Start each check from **New** (an empty macro).
 4. If any box asks to save over an existing file, say No / Cancel. Save test macros only into `C:\Temp\vmb\`.
-   Note: the program itself keeps its settings, an autosave draft and its run history in `Documents\VisualMacros\`
-   on its own; that is expected and is the only place outside `C:\Temp\vmb\` where files may appear.
+   The program is always started with `--data "C:\Temp\vmb\data"` (see below), so its own settings, autosave draft,
+   run history and logs also stay inside `C:\Temp\vmb\`. With that, NOTHING is written outside `C:\Temp\vmb\`.
 5. The emergency stop is **Ctrl+Shift+X** (quits the program). **Esc** stops a running macro.
 6. If the mouse or keyboard starts doing something you did not expect, press Esc, then Ctrl+Shift+X, and write it down.
 
@@ -40,7 +40,9 @@ developer: **do not change the script.** If something fails, record it and go on
    `"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" C:\Temp\vmb\VMB33.ahk --self-test C:\Temp\vmb\selftest.txt`
    Open `selftest.txt`. Report the last line (`Failures: N`), the number of lines starting with `PASS`, and every line
    that does NOT start with `PASS`. Expected: `Failures: 0`, 947 PASS.
-2. Start the program normally (double-click `VMB33.ahk`). Report any error or warning box, word for word.
+2. Start the program with this exact command - never by double-click, never without `--data`:
+   `"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" C:\Temp\vmb\VMB33.ahk --data "C:\Temp\vmb\data"`
+   Use the same command every time you start it during this test. Report any error or warning box, word for word.
 3. Click the **?** button -> **Check this PC**. When the result window appears, click **Copy** and paste the whole text
    into your results file. (Already seen once on this PC: all PASS except a "Fonts" CHECK - that one is known.)
 
@@ -98,7 +100,7 @@ For each line write PASS or FAIL and one sentence on what happened.
 13. Right-click a column header - a list of columns to show / hide appears (just close it).
 14. Scroll the grid sideways with the bottom scroll bar - the # and Action columns stay visible on the left.
 15. Click **List** (the old tree view), then **Grid** - both show the same steps.
-16. Close and restart the program - zoom, column widths and the macro are as you left them.
+16. Close and restart the program (same command with `--data`) - zoom, column widths and the macro are as you left them.
 
 ## Part 6 - repeat for a list (no loop blocks)
 1. **New**. Record in Notepad: click in the text area, type `Smith`, press Tab, type `250`, press Enter. Stop.
