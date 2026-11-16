@@ -200,8 +200,16 @@ Setup: the Part 2 macro re-recorded and saved as `C:\Temp\vmb\part5-notepad.vmac
 - Method note: all clicks/keys came from a second AutoHotkey process (SendLevel 1); buttons were pressed with BM_CLICK.
 
 ## Still open
-- Part 5.8 (header filter arrow), Part 5.11 (Delete on recorded waits), Part 5.16 (Last run after restart).
-- Findings 2 (ControlClick on "Save &as...") and 3 (`notepad?`) above, and the desktop-dependent self-test check.
+- Fixed in V34.2 (below): Part 5.8, 5.11, 5.16 and the desktop-dependent self-test check.
+- Finding 3 (`notepad?`) is by design: `V24_MarkApps` adds `?` after a program that is not running (Notepad had just been closed).
+- Finding 2 (ControlClick on "Save &as...") affects only outside test tools; people and BM_CLICK / Alt+A work. Not changed.
+
+# V34.2 (fixed on the PC, 2026-11-16) - verified with the same driver
+- Self-test: 1004 PASS, `Failures: 0` (6 new V34.2 checks).
+- Part 5: **16 of 16 PASS** - 5.8 the Action arrow on the frozen pane and the On what arrow both open the tick list and filter;
+  5.11 Delete says `Cleared 0 cells. 3 cells show the pause that was recorded; only a wait you typed can be cleared.`;
+  5.16 after a restart the grid is identical, Last run shows `ok` (from the run history).
+- Regression: retest 1 (3 of 3 identical), retest 2 menus (2 of 2), V34.1 emergency exit (7 of 7, 0.11-0.13 s).
 
 ## Files created on the PC (all in C:\Temp\vmb)
 part1-selftest.ahk, retest-v34.ahk (= pc-tests/retest-v34.ahk), probe-windows.ahk, probe-saveas.ahk, probe-panicexit.ahk,

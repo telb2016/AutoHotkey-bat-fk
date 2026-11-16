@@ -60,3 +60,19 @@ No self-test or harness check touches a drive other than C:. Grep `"[A-BD-Z]:\` 
 
 ## Other
 Title bars and help say V34. WORK-AI-TEST-INSTRUCTIONS.md has a "Retest after V34" list. Setting `minStepMs` has no editor control (edit the macro JSON).
+
+## V34.2 - PC test round 2 (made and tested on the Windows PC)
+- **Header filter arrow (Part 5.8).** The mark (▼) is drawn right after the title (`V33_OnWmNotify`, left + 6), but
+  `V32_HitArrow` only accepted the right 18 px, whose last pixels are the column divider (a resize, no click). Now
+  `V34_ArrowHit` also accepts from the drawn mark (`V34_HeadMarkX`) to the right edge; the title text still sorts.
+  The frozen pane had plain titles and no ColClick handler, so the Action arrow there did nothing: it now copies the grid's titles
+  (`V34_FreezeTitles`) and forwards clicks (`V34_OnFreezeColClick` -> `V27_OnColClick(..., hitLv, hitIdx)`; `V32_HeaderHit`,
+  `V32_HeaderClick`, `V32_OpenPopup` take the list / index that was clicked).
+- **Delete on recorded waits (5.11).** Only a typed wait (`delayMs`) can be cleared; a recorded pause (`gapMs`) stays. Behaviour kept,
+  the status now says so (`V34_EmptyNote`, `V28_DeleteCell`).
+- **Last run after a restart (5.16).** Opening a macro reset Last run to "not run yet". `V34_LastRunFromHistory` (called from
+  `VMB_SetMacro`) takes the newest history run when its step count matches (`V34_LastRunState`): `ok`, or a note on the steps that had
+  one / where it failed.
+- **Self-test** `V20 nothing known ...` used -32000,-32000, where Windows parks minimized windows; now a point far outside the virtual screen.
+- `notepad?` in the Program column is by design (`V24_MarkApps`: program not running).
+- Verified on the PC: self-test 1004 PASS / 0 failures; driver Part 5 16 of 16; regression retest 1, 2 and V34.1 exit all pass.

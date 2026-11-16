@@ -851,7 +851,7 @@ OpenArrow(lv, col0) {
     if !c
         return 0
     before := WinGetList("ahk_pid " . G.Pid)
-    MouseMove(c.X + c.W - 7, h.Y + h.H // 2), Sleep(300)
+    MouseMove(c.X + c.W - 14, h.Y + h.H // 2), Sleep(300)
     Click()
     t0 := A_TickCount
     while A_TickCount - t0 < 1500 {
@@ -901,7 +901,7 @@ P5_Range() {
     orig := before[2] . "/" . before[3] . "/" . before[4]
     if mid = orig {
         Send("{Esc}"), Sleep(300)
-        return {Name: "Range Shift+Down x2, Delete, Ctrl+Z", Ok: false, Text: "status '" . Trim(st) . "'; Waits rows 2-4: " . orig . " -> after Delete unchanged " . mid
+        return {Name: "Range Shift+Down x2, Delete, Ctrl+Z", Ok: InStr(st2, "recorded") ? true : false, Text: "status '" . Trim(st) . "'; Waits rows 2-4: " . orig . " -> after Delete unchanged " . mid
             . "; status after Delete '" . Trim(st2) . "' (Ctrl+Z not pressed, so the recording is not undone)"}
     }
     Undo()

@@ -1,4 +1,6 @@
 ; VisualMacroBlocks-makecode-telek-V34
+; V34.2 = PC test round 2: the header filter arrow opens from the mark itself (also on the frozen # / Action titles), Delete says
+;         why recorded waits stay, Last run comes from the run history after a restart, one self-test no longer depends on the desktop.
 ; V34.1 = Ctrl+Shift+X (emergency exit) ends the process directly, without waiting for the normal exit work.
 ; V34 = V33 + fixes from the first PC test: steadier replay (settle floor, explicit key / double-click presses), header menu at the right place,
 ;       Ready to play? in Easy mode, fast Enter in a cell, caption button names, unsaved changes restored after a restart. See V34-NOTES.md.
@@ -3522,6 +3524,7 @@ VMB_SetMacro(macro, path) {
     s.Undo := [], s.Redo := []
     s.LastNotes := Map()            ; V21: a new or opened macro has no notes from a run
     s.HasRun := false               ; V27: nothing has run yet
+    V34_LastRunFromHistory()        ; V34.2: ... unless the run history says how the last run went
     s.ListUndo := [], s.ListRedo := [], s.ListResult := Map(), s.PreviewRow := 1     ; V30: a new or opened macro has its own list
     s.ValUndo := [], s.ValRedo := []                                                 ; V31.1: and its own Values
     s.Checked := Map()
@@ -16659,13 +16662,13 @@ V27_Refill() {
 
 ; @summary Clicked a column title: sort by it (ascending), again = descending. The "#" title = back to step order.
 ; @tags grid, sort, v27
-V27_OnColClick(lv, col) {
+V27_OnColClick(lv, col, hitLv := 0, hitIdx := -1) {
     s := VMB()
     cols := V27_Columns()
     if col < 1 || col > cols.Length
         return
     key := cols[col].Key
-    if V32_HeaderClick(col)                        ; V32: a click on the arrow part of the title opens the filter popup instead of sorting
+    if V32_HeaderClick(col, hitLv, hitIdx)                        ; V32: a click on the arrow part of the title opens the filter popup instead of sorting
         return
     if key = "num"
         return V27_SortReset()
@@ -17698,7 +17701,8 @@ V28_DeleteCell() {
     if !V31_Clearable(col.Key)
         return VMB_Status("Delete clears only a Note, Waits first, Only when or If it fails cell. To delete the step, use the Delete button or the right-click menu.")
     if !node.Has(V31_ClearKey(col.Key))
-        return VMB_Status(col.Title . " is already empty.")
+        return VMB_Status(col.Key = "wait" ? "Waits first already shows the pause that was recorded; only a wait you typed can be cleared."
+            : col.Title . " is already empty.")
     V28_Do(node, V28_Plan(node, col.Key, ""), col.Title . " cleared. Ctrl+Z undoes it.")
 }
 
@@ -22568,18 +22572,20 @@ V32_Pop() {
 ; @summary Is the mouse in the arrow part of this column's header cell right now (used by the header click)?
 ; @returns Boolean
 ; @tags filter, header, v32
-V32_HeaderHit(col) {
+V32_HeaderHit(col, lv := 0, idx := -1) {
     s := VMB()
-    hdr := SendMessage(0x101F, 0, 0, s.GridLV)                   ; LVM_GETHEADER
+    hdr := SendMessage(0x101F, 0, 0, lv ? lv : s.GridLV)        ; LVM_GETHEADER (V34.2: also the frozen pane's)
     if !hdr
         return false
+    idx := idx < 0 ? col - 1 : idx
     rc := Buffer(16, 0)
-    if !SendMessage(0x1207, col - 1, rc.Ptr, hdr)                ; HDM_GETITEMRECT
+    if !SendMessage(0x1207, idx, rc.Ptr, hdr)                    ; HDM_GETITEMRECT
         return false
     pt := Buffer(8, 0)
     DllCall("GetCursorPos", "Ptr", pt)
     DllCall("ScreenToClient", "Ptr", hdr, "Ptr", pt)
-    return V32_HitArrow(NumGet(pt, 0, "Int"), NumGet(rc, 0, "Int"), NumGet(rc, 8, "Int"), Round(18 * A_ScreenDPI / 96))
+    left := NumGet(rc, 0, "Int"), right := NumGet(rc, 8, "Int")
+    return V34_ArrowHit(NumGet(pt, 0, "Int"), V34_HeadMarkX(hdr, idx, left), left, right, Round(18 * A_ScreenDPI / 96))
 }
 
 ; @summary Fills the popup's list from the values, the search text and the ticks: "(Select all)" first, then each value that matches.
@@ -22693,7 +22699,7 @@ V32_ClosePopup(*) {
 ; @summary Opens the filter popup under a column's header: a search box, a tick list of the column's values (Select all first), OK / Cancel.
 ;          A small borderless window, not a Menu (menus cannot hold tick lists). Values come from all steps; already picked values are ticked.
 ; @tags filter, gui, v32
-V32_OpenPopup(col) {
+V32_OpenPopup(col, lv := 0, idx := -1) {
     s := VMB()
     cols := V27_Columns()
     if VM_IsRecording() || VM_IsPlaying() || s.View != "grid" || s.Sheet != "steps" || col < 1 || col > cols.Length
@@ -22727,9 +22733,9 @@ V32_OpenPopup(col) {
     g.OnEvent("Close", V32_ClosePopup)
     V32_PopFill()
     x := 100, y := 100
-    hdr := SendMessage(0x101F, 0, 0, s.GridLV)
+    hdr := SendMessage(0x101F, 0, 0, lv ? lv : s.GridLV)
     rc := Buffer(16, 0)
-    if hdr && SendMessage(0x1207, col - 1, rc.Ptr, hdr) {
+    if hdr && SendMessage(0x1207, idx < 0 ? col - 1 : idx, rc.Ptr, hdr) {
         pt := Buffer(8, 0)
         NumPut("Int", NumGet(rc, 0, "Int"), "Int", NumGet(rc, 12, "Int"), pt)
         DllCall("ClientToScreen", "Ptr", hdr, "Ptr", pt)
@@ -22745,10 +22751,10 @@ V32_OpenPopup(col) {
 ; @summary A click on a column title: in the arrow part opens the filter popup (returns true); anywhere else it is a sort click (returns false).
 ; @returns Boolean
 ; @tags filter, header, v32
-V32_HeaderClick(col) {
+V32_HeaderClick(col, lv := 0, idx := -1) {
     V32_ClosePopup()
-    if V32_HeaderHit(col) {
-        V32_OpenPopup(col)
+    if V32_HeaderHit(col, lv, idx) {
+        V32_OpenPopup(col, lv, idx)
         return true
     }
     return false
@@ -23472,7 +23478,7 @@ V33_Delete() {
         return
     cols := V27_Columns()
     cells := []
-    skipped := 0
+    skipped := 0, empty := 0
     Loop live.R2 - live.R1 + 1 {
         row := live.R1 + A_Index - 1
         node := s.GridNodes.Get(row, 0)
@@ -23484,10 +23490,13 @@ V33_Delete() {
             }
             if node.Has(V31_ClearKey(key))
                 cells.Push({Row: row, Key: key, Text: ""})
+            else
+                empty += 1
         }
     }
     res := V33_Apply(cells)
-    VMB_Status(V33_DoneText("Cleared", res.Done, res.Refused) . (skipped ? " " . skipped . " cells are worked out from the step and cannot be cleared." : "") . (res.Done ? "  Ctrl+Z undoes it all." : ""))
+    VMB_Status(V33_DoneText("Cleared", res.Done, res.Refused) . (skipped ? " " . skipped . " cells are worked out from the step and cannot be cleared." : "")
+        . V34_EmptyNote(empty, live.Keys.Length = 1 && cols[live.Keys[1]].Key = "wait") . (res.Done ? "  Ctrl+Z undoes it all." : ""))
 }
 
 ; @summary Ctrl+X: a range is copied (V33_Copy) and then cleared where it can be (V33_Delete); one cell as before (V29_CutCell).
@@ -24105,6 +24114,7 @@ V33_BuildFreeze(g) {
     s := VMB()
     s.GridFreeze := g.AddListView("x10 y40 w200 h300 Grid -Multi -E0x200 +LV0x10000 Hidden", ["#", "Action"])
     s.GridFreeze.OnEvent("Click", V33_OnFreezeClick)
+    s.GridFreeze.OnEvent("ColClick", V34_OnFreezeColClick)       ; V34.2: sort / filter arrow on the frozen titles too
     s.GridFreeze.OnNotify(-12, V33_OnFreezeDraw)
     V33_ApplyFreezeFont()
     OnMessage(0x20A, V33_OnWmWheel)                            ; the wheel over the pane scrolls the grid
@@ -24186,6 +24196,7 @@ V33_FreezeTick(force := false) {
             V33_FreezeFill(iNum, iAct, wNum, wAct)
             s.FrzDirty := false
         }
+        V34_FreezeTitles(iNum, iAct)
         if !s.FrzShown {
             fz.Visible := true
             DllCall("SetWindowPos", "Ptr", fz.Hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x13)      ; on top of the grid, no move / size / activate
@@ -24518,6 +24529,103 @@ V34_MaybeRestoreDraft(last) {
         return true
     }
     return false
+}
+
+; ---- V34.2 PC test round 2: header filter arrow, frozen titles, Delete on recorded waits, Last run after a restart -------
+
+; @summary True when a header click is on the filter mark: from where the mark is drawn (markX, 0 = unknown) to the right edge,
+;          or the old right-hand zone. The mark sits right after the title, so the old zone alone missed it (and its last
+;          pixels are the column divider, which starts a resize instead of a click).
+; @tags filter, header, v34
+V34_ArrowHit(x, markX, left, right, arrowW) => V32_HitArrow(x, left, right, arrowW) || (markX > left && markX < right && x >= markX - 3 && x < right) ? true : false
+
+; @summary The text of one header item (HDM_GETITEMW), "" when it cannot be read.
+; @tags header, gui, v34
+V34_HeadText(hdr, idx) {
+    buf := Buffer(1024, 0), hdi := Buffer(72, 0)
+    NumPut("UInt", 0x2, hdi, 0), NumPut("Ptr", buf.Ptr, hdi, 8), NumPut("Int", 500, hdi, 24)
+    return hdr && SendMessage(0x120B, idx, hdi.Ptr, hdr) ? StrGet(buf, "UTF-16") : ""
+}
+
+; @summary Header client x where the filter mark of an item starts (titles are drawn from left + 6, V33_OnWmNotify); 0 = unknown.
+; @tags filter, header, v34
+V34_HeadMarkX(hdr, idx, left) {
+    text := V34_HeadText(hdr, idx)
+    cut := InStr(text, " ", , -1)
+    return cut ? left + 6 + V34_TextW(hdr, SubStr(text, 1, cut)) : 0
+}
+
+; @summary Width in pixels of a text in a control's font.
+; @tags gui, v34
+V34_TextW(hwnd, text) {
+    hdc := DllCall("GetDC", "Ptr", hwnd, "Ptr")
+    font := SendMessage(0x31, 0, 0, hwnd)                          ; WM_GETFONT
+    old := font ? DllCall("SelectObject", "Ptr", hdc, "Ptr", font, "Ptr") : 0
+    sz := Buffer(8, 0)
+    DllCall("GetTextExtentPoint32W", "Ptr", hdc, "Str", text, "Int", StrLen(text), "Ptr", sz)
+    if old
+        DllCall("SelectObject", "Ptr", hdc, "Ptr", old)
+    DllCall("ReleaseDC", "Ptr", hwnd, "Ptr", hdc)
+    return NumGet(sz, 0, "Int")
+}
+
+; @summary A click on a title of the frozen pane: the same as on the grid's # / Action title (sort, or the filter arrow).
+; @tags freeze, filter, header, v34
+V34_OnFreezeColClick(lv, col) {
+    s := VMB()
+    V27_OnColClick(s.GridLV, col = 1 ? V33_ColOf("num") : V33_ColOf("action"), lv, col - 1)
+}
+
+; @summary The frozen pane shows the grid's own # and Action titles (with the sort and filter marks), not plain names.
+; @tags freeze, header, v34
+V34_FreezeTitles(iNum, iAct) {
+    s := VMB()
+    src := SendMessage(0x101F, 0, 0, s.GridLV), dst := SendMessage(0x101F, 0, 0, s.GridFreeze)
+    for i, c in [iNum, iAct] {
+        t := V34_HeadText(src, c - 1)
+        if t != "" && t != V34_HeadText(dst, i - 1)
+            s.GridFreeze.ModifyCol(i, , t)
+    }
+}
+
+; @summary The end of the Delete status for cells that had nothing to clear: a Waits first cell without a typed wait shows the
+;          recorded pause, which stays (V33 said only "Cleared 0 cells.").
+; @tags clear, grid, v34
+V34_EmptyNote(empty, waitOnly) {
+    if !empty
+        return ""
+    if waitOnly
+        return " " . empty . (empty = 1 ? " cell shows" : " cells show") . " the pause that was recorded; only a wait you typed can be cleared."
+    return " " . empty . (empty = 1 ? " cell was" : " cells were") . " already empty."
+}
+
+; @summary The Last run column after opening a macro: from the newest run in the history (runs oldest first), when it ran this
+;          many steps. Returns {HasRun, Notes (Map step -> note)}; a different step count means the notes no longer fit.
+; @tags macro, history, grid, v34
+V34_LastRunState(runs, steps) {
+    out := {HasRun: false, Notes: Map()}
+    if !(runs is Array) || !runs.Length || steps < 1
+        return out
+    r := runs[runs.Length]
+    if r["Steps"] != steps
+        return out
+    out.HasRun := true
+    for n in r["NoteSteps"]
+        out.Notes[n] := "had a note in the last run (" . r["When"] . "), see Run history"
+    if r["FailStep"] && !out.Notes.Has(r["FailStep"])
+        out.Notes[r["FailStep"]] := "failed here in the last run (" . r["When"] . ")"
+    return out
+}
+
+; @summary Called when a macro is opened: fills HasRun / LastNotes from its run history (a restart no longer says "not run yet").
+; @tags macro, history, grid, v34
+V34_LastRunFromHistory() {
+    s := VMB()
+    try {
+        last := V34_LastRunState(V25_ReadRuns(s.Path), VMF_Flatten(s.Macro["blocks"]).Length)
+        if last.HasRun
+            s.HasRun := true, s.LastNotes := last.Notes
+    }
 }
 
 ; ==== V34 END (new V34 functions are added above this line)
@@ -25383,7 +25491,7 @@ V4_SelfTest(path) {
             "Go back to the macro's main window|Switch to the a window  (waits up to 10 s for it)")
         check("V20 web blocks keep their older line (V21: they get a sentence)", V20_StepLine(Map("type", "web_click", "selector", "#go")), 'Web: click "go"')
         check("V20 long text is shortened and line breaks shown", V20_Short("a`r`nb") . "|" . StrLen(V20_Short("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")), "a⏎b|60")
-        check("V20 nothing known under a point of this script's own window", V20_CaptureWhat(-32000, -32000), "")
+        check("V20 nothing known under a point far outside every screen", V20_CaptureWhat(SysGet(76) + SysGet(78) + 20000, SysGet(77) + SysGet(79) + 20000), "")      ; V34.2: -32000 is where Windows parks minimized windows
         v21A := Map("exe", "notepad.exe"), v21B := Map("exe", "calc.exe")
         v21S := [Map("type", "click", "win", v21A), Map("type", "text", "win", Map("exe", "NOTEPAD.EXE")), Map("type", "keys", "win", v21A)]
         v21R := V21_AppRuns(v21S)
@@ -26726,6 +26834,15 @@ V4_SelfTest(path) {
         check("V34 draft: made for another file = no", V34_UseDraft("C:\m\b.json", "C:\m\a.json", "20261115082500", "20261115082300", "{x}", "{y}"), false)
         check("V34 draft: no record = no", V34_UseDraft("", "C:\m\a.json", "20261115082500", "20261115082300", "{x}", "{y}"), false)
         check("V34 steady runner: a settle wait is only for steady input steps", V34_FloorMs(V18_Steady(V4Runner(VMF_NewMacro(), {})), VMF_NewMacro()["settings"]), 120)
+        check("V34.2 header: the mark after the title opens the filter, the title text sorts, the old right zone still works",
+            V34_ArrowHit(52, 50, 0, 110, 18) . V34_ArrowHit(100, 50, 0, 110, 18) . V34_ArrowHit(30, 50, 0, 110, 18) . V34_ArrowHit(100, 0, 0, 110, 18) . V34_ArrowHit(120, 50, 0, 110, 18), "11010")
+        check("V34.2 header: a mark past the right edge (cut title) falls back to the right zone", V34_ArrowHit(60, 140, 0, 110, 18) . V34_ArrowHit(100, 140, 0, 110, 18), "01")
+        check("V34.2 delete: recorded waits are explained, other empty cells too", V34_EmptyNote(0, true) . "|" . V34_EmptyNote(3, true) . "|" . V34_EmptyNote(1, false),
+            "| 3 cells show the pause that was recorded; only a wait you typed can be cleared.| 1 cell was already empty.")
+        v342Runs := V25_ParseRuns("When,Result,Seconds,Steps,Notes,NoteSteps`r`n2026-11-16 10:00,Finished,4.1,7,0,`"`"`r`n2026-11-16 11:00,Failed at step 5,2.0,7,1,`"3`"")
+        v342 := V34_LastRunState(v342Runs, 7)
+        check("V34.2 last run from history: newest run, notes and failed step", v342.HasRun . "|" . v342.Notes.Count . "|" . v342.Notes.Has(3) . v342.Notes.Has(5), "1|2|11")
+        check("V34.2 last run from history: other step count or no history = not run yet", V34_LastRunState(v342Runs, 6).HasRun . V34_LastRunState([], 7).HasRun, "00")
     } catch as err {
         failures += 1
         rows.Push("FAIL | Unexpected exception: " . err.Message . " | " . err.What . " | line " . err.Line)
