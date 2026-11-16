@@ -92,5 +92,64 @@ Method: double-click the cell, then `there{Enter}` (or `2{Enter}`) sent as one b
    Easy layout over that button. Harmless for people, but worth a look.
 3. Retest 3 `notepad?` program name (see above).
 
-## Not done (needs a person)
-Retest 2 (menu positions), retest 5 (Ready to play? with Notepad closed in Easy mode), Part 1 steps 2-3, Parts 2-7.
+# V34.1 retest (commit beb182cb), 2026-11-16 - automated driver, same PC
+
+## Self-test (V34.1)
+- 998 PASS, `Failures: 1`, twice: `FAIL | V20 nothing known under a point of this script's own window`
+  (`V20_CaptureWhat(-32000, -32000)` must be "").
+- The previous version (4ab7a8c6, `Failures: 0` yesterday) also fails this check today, so it depends on the desktop
+  (minimized windows are parked at -32000,-32000), not on the V34.1 change. Please make the check independent of the desktop.
+
+## Retest V34.1 - emergency exit: PASS (7 of 7 under 1 s)
+Auto-save off. Each try: start, edit a Text cell (title shows `*`), close with X, wait 2.5 s, Ctrl+Shift+X.
+
+| Try | Situation | Seconds until process gone | Ctrl/Shift stuck after |
+|---|---|---|---|
+| 1 | edited cell, closed with X | 0.24 | no |
+| 2 | edited cell, closed with X | 0.13 | no |
+| 3 | edited cell, closed with X | 0.11 | no |
+| 4 | edited cell, closed with X | 0.13 | no |
+| 5 | edited cell, closed with X | 0.16 | no |
+| P | while playing (run bar shown) | 0.11 | no |
+| R | while recording | 0.11 | no |
+
+REC bar left on screen afterwards: no. Finding 1 above is fixed.
+
+## Retest 2 - menu positions: PASS (2 of 2)
+- Editor at 520,380 (not top-left).
+- Right-click on the **Action** title at 1431,611: column menu at 1431,611 (202x609) - under the mouse.
+- **?** button at 1186,418 (30x30), mouse parked far away at 3640,1860: menu at 1186,448 (180x50) - just under the button.
+  (A first run reported FAIL only because the driver had not closed the column menu yet; fixed in the driver, rerun PASS.)
+
+## Retest 5 - "Ready to play?" with Notepad closed, Easy mode: PASS
+- Recorded in Easy mode: Window / Click "a text box" / Type "test" (program `notepad`). Notepad closed, Play pressed.
+- Box "Ready to play?": `• notepad is not open - step 2 uses it.` / `Yes = play anyway, No = stop so I can fix it.`
+- Answered No. Status bar: `notepad is not open - step 2 uses it.`
+
+## Part 1 step 2-3 - start-up and Check this PC
+- No error or warning box at any start (about 12 starts across the runs).
+- Check this PC (copied text):
+
+```text
+Check this PC (V26) - AutoHotkey 2.0.19 - Windows 10.0.26200
+PASS | Scroll (list box): read line 150, scrolled to the top, restored, back at line 150.
+PASS | Scroll (text box): read line 150, scrolled to the top, restored, back at line 150.
+PASS | Close: the test list window this check opened is closed.
+PASS | Size: Notepad took a bigger size and went back to the original size.
+PASS | Close: the Notepad this check opened is closed.
+CHECK | Fonts: ⚠ ⚡ ✎ is not the same width as 0 (7 px) in the list font - the Marks column may not line up. Use plain marks (PlainMarks=1). ↕=7  ≈=7  ►=7  ◇=8  ⚠=12  ⚡=12  ✎=9.
+PASS | Indent: char 7.0 px, asked 21 px, got 21 px, 3 characters.
+PASS | Screen: 3840 x 2160, scaling 100 %.
+PASS | Folder: can write to C:\Temp\vmb\data (run history works).
+1 line(s) to CHECK.
+```
+(Fonts CHECK is the known one.)
+
+## Still open
+- Findings 2 (ControlClick on "Save &as...") and 3 (`notepad?`) above, and the desktop-dependent self-test check.
+- Not done yet: Parts 3-7 of WORK-AI-TEST-INSTRUCTIONS.md (Part 2 was covered by retest 1).
+
+## Files created on the PC (all in C:\Temp\vmb)
+part1-selftest.ahk, retest-v34.ahk (= pc-tests/retest-v34.ahk), probe-windows.ahk, probe-saveas.ahk, probe-panicexit.ahk,
+VMB34.ahk, VMB34-prev.ahk, selftest.txt, selftest-prev.txt, retest-notepad.vmacro.json, retest-v34-results*.md,
+retest-v34-log.txt, data\ (ini, autosave draft, last-playback.log). `VMB33.ahk` was already there (not made by this test).

@@ -62,6 +62,10 @@ Main() {
                 case 4: Item4()
                 case 6: Item6()
                 case 3: Item3()
+                case 2: Item2()
+                case 5: Item5()
+                case 7: Item7()
+                case 8: Item8()
                 default: Log("unknown item " . it)
             }
         } catch as e {
@@ -289,6 +293,199 @@ Item3() {
         Res("| " . want . " | " . Pipe(r[COL["action"]]) . " | " . Pipe(r[COL["target"]]) . (ok ? "" : " **(expected " . want . ")**") . " | " . Pipe(r[COL["window"]]) . " |`n")
     }
     Res("`n**Result: " . good . " of " . seq.Length . " named right** (the driver clicks the real button each time; after Maximize the Restore button sits at the screen's top-right, not the old spot).`n")
+}
+
+; ---------------- item 8: Check this PC (Part 1 step 3) ----------------
+Item8() {
+    Res("`n## Part 1 step 3 - Check this PC`n")
+    NpClose()
+    help := HelpBtn()
+    MouseMove(A_ScreenWidth - 200, A_ScreenHeight - 300)
+    PostMessage(0xF5, 0, 0, help)
+    if !WinWait("ahk_class #32768", , 3)
+        return Res("Skipped: the ? menu did not open.`n")
+    Sleep(300)
+    Send("{Down 2}{Enter}")
+    if !(win := WinWait("Check this PC ahk_class AutoHotkeyGUI ahk_pid " . G.Pid, , 120))
+        return Res("FAIL: no Check this PC window within 120 s. Status: ``" . StatusText() . "```n")
+    Sleep(500)
+    txt := ControlGetText("Edit1", win)
+    Res("Result window text (same text the Copy button copies):`n`n``````text`n" . txt . "`n```````n- Status bar: ``" . StatusText() . "```n"
+        . "- Notepad left open by the check: " . (WinExist("ahk_exe notepad.exe") ? "yes" : "no") . "`n")
+    WinClose(win), Sleep(500)
+}
+
+; ---------------- item 2: menu positions ----------------
+Item2() {
+    Res("`n## Retest 2 - header right-click menu and ? menu positions`n")
+    ed := Editor()
+    WinActivate(ed), WinMove(520, 380, , , ed), Sleep(800)
+    WinGetPos(&ex, &ey, , , ed)
+    Res("- Editor moved to " . ex . "," . ey . " (not top-left).`n")
+    lv := GridLV(), hdr := 0
+    for hw in WinGetControlsHwnd(ed)
+        if WinGetClass(hw) = "SysHeader32" && DllCall("GetParent", "Ptr", hw, "Ptr") = lv
+            hdr := hw
+    cell := LvCellScreen(lv, 0, COL["action"] - 1)
+    if !hdr || !cell
+        return Res("Skipped: grid header or Action column not found (rows: " . GridRows().Length . ").`n")
+    h := Rect(hdr)
+    mx := cell.X + cell.W // 2, my := h.Y + h.H // 2
+    MouseMove(mx, my), Sleep(400)
+    Click("Right")
+    m := MenuPos()
+    if !m
+        Res("- Right-click on the Action title at " . mx . "," . my . ": **no menu opened**.`n")
+    else {
+        ok := (m.X >= mx - 4 && m.X <= mx + 12 || Abs(m.X + m.W - mx) <= 12) && (m.Y >= my - 4 && m.Y <= my + 12 || Abs(m.Y + m.H - my) <= 12)
+        Res("- Right-click on the Action title at " . mx . "," . my . ": menu at " . m.X . "," . m.Y . " (" . m.W . "x" . m.H . "). "
+            . (ok ? "**PASS** (under the mouse)" : "**FAIL** (not at the mouse)") . "`n")
+        CloseMenus()
+    }
+    help := HelpBtn(), b := Rect(help)
+    MouseMove(A_ScreenWidth - 200, A_ScreenHeight - 300), Sleep(300)
+    PostMessage(0xF5, 0, 0, help)
+    m := MenuPos()
+    if !m
+        return Res("- ? button: **no menu opened**.`n")
+    ok := Abs(m.Y - (b.Y + b.H)) <= 6 && m.X >= b.X - 230 && m.X <= b.X + 6
+    Res("- ? button at " . b.X . "," . b.Y . " (" . b.W . "x" . b.H . "), mouse parked far away at " . (A_ScreenWidth - 200) . "," . (A_ScreenHeight - 300)
+        . ": menu at " . m.X . "," . m.Y . " (" . m.W . "x" . m.H . "). " . (ok ? "**PASS** (just under the button)" : "**FAIL**") . "`n")
+    CloseMenus()
+}
+
+CloseMenus() {
+    loop 3 {
+        if !WinExist("ahk_class #32768")
+            return
+        Send("{Esc}"), Sleep(300)
+        PostMessage(0x1F, 0, 0, , Editor())     ; WM_CANCELMODE
+        WinWaitClose("ahk_class #32768", , 1)
+    }
+    Res("- (a menu window was still open after 3 tries to close it)`n")
+}
+
+MenuPos() {
+    if !(hw := WinWait("ahk_class #32768", , 3))
+        return 0
+    Sleep(300)
+    WinGetPos(&x, &y, &w, &h, hw)
+    return {X: x, Y: y, W: w, H: h}
+}
+
+HelpBtn() {
+    for hw in WinGetControlsHwnd(Editor())
+        if WinGetClass(hw) = "Button" && ControlGetText(hw) = "?" && ControlGetVisible(hw)
+            return hw
+    throw Error("? button not found.")
+}
+
+; ---------------- item 5: Ready to play? with Notepad closed, Easy mode ----------------
+Item5() {
+    Res("`n## Retest 5 - Ready to play? with Notepad closed (Easy mode)`n")
+    title := WinGetTitle(Editor())
+    Res("- Easy mode: " . (InStr(title, " Easy") ? "yes" : "**no**") . " (title ``" . title . "``)`n")
+    if !G.Np || !WinExist(G.Np)
+        NpOpen(false)
+    NpPlace(0.10, 0.15, 0.40, 0.45)
+    NpClear()
+    NewMacro()
+    StartRec()
+    ed := NpEditRect()
+    MouseMove(ed.X + ed.W // 2, ed.Y + ed.H // 2), Sleep(500)
+    Click(), Sleep(400)
+    Send("test"), Sleep(600)
+    StopRec()
+    Res("`nRecorded:`n`n" . GridTable(GridRows()) . "`n")
+    NpClose()
+    WinActivate(Editor()), Sleep(300)
+    Btn("&Play")
+    if box := WaitBox("Ready to play?", 6000) {
+        txt := WinGetText(box)
+        BoxBtn(box, "&No")
+        Res("- Box text: ``" . Flat(txt) . "```n- Names Notepad: " . (InStr(txt, "notepad") ? "**PASS**" : "**FAIL**") . ". Answered No.`n")
+    } else {
+        if WinExist("run bar ahk_pid " . G.Pid)
+            Send("{Esc}")
+        Res("- **FAIL: no Ready to play? box** (Esc sent if it started). Status: ``" . StatusText() . "```n")
+    }
+    Sleep(800)
+    Res("- Status bar after: ``" . StatusText() . "```n")
+}
+
+; ---------------- item 7: emergency exit (V34.1) ----------------
+Item7() {
+    Res("`n## Retest V34.1 - emergency exit (Ctrl+Shift+X)`n`n| Try | Situation | Title before | Seconds until process gone | Ctrl/Shift stuck after |`n|---|---|---|---|---|`n")
+    loop 5 {
+        EnsureVmb()
+        AutoSaveOff()
+        r := FirstTypeRow()
+        rc := r ? CellRect(GridLV(), r, "text") : 0
+        if rc {
+            Click(rc.X + rc.W // 2 . " " . rc.Y + rc.H // 2 . " 2"), Sleep(500)
+            Send("^a"), Sleep(100)
+            Send("abc" . A_Index . "{Enter}"), Sleep(800)
+        }
+        title := WinGetTitle(Editor())
+        WinClose(Editor()), Sleep(2500)
+        p := PanicTime()
+        Res("| " . A_Index . " | edited cell, closed with X, 2.5 s | ``" . title . "`` | " . p.Text . " | " . p.Stuck . " |`n")
+    }
+    EnsureVmb()
+    if !G.Np || !WinExist(G.Np)
+        NpOpen(false)
+    WinActivate(Editor()), Sleep(300)
+    Btn("&Play")
+    t0 := A_TickCount
+    while !WinExist("run bar ahk_pid " . G.Pid) && A_TickCount - t0 < 8000 {
+        if box := WinExist("Ready to play? ahk_pid " . G.Pid)
+            BoxBtn(box, "&Yes")
+        Sleep(50)
+    }
+    playing := WinExist("run bar ahk_pid " . G.Pid) ? "playing" : "run bar not seen"
+    Sleep(1000)
+    p := PanicTime()
+    Res("| P | while playing (" . playing . ") | - | " . p.Text . " | " . p.Stuck . " |`n")
+    EnsureVmb()
+    StartRec()
+    Sleep(1000)
+    p := PanicTime()
+    Res("| R | while recording | - | " . p.Text . " | " . p.Stuck . " |`n")
+    Sleep(500)
+    Res("- REC bar left on screen after: " . (WinExist("Visual Macro Blocks REC") ? "**yes**" : "no") . "`n")
+}
+
+PanicTime() {
+    pid := G.Pid
+    t0 := A_TickCount
+    Send("^+x")
+    ProcessWaitClose(pid, 10)
+    secs := Round((A_TickCount - t0) / 1000, 2)
+    alive := ProcessExist(pid)
+    if alive
+        ProcessClose(pid)
+    Sleep(300)
+    stuck := (GetKeyState("Ctrl") ? "Ctrl " : "") . (GetKeyState("Shift") ? "Shift" : "")
+    return {Text: alive ? "**still running after 10 s** (driver ended it)" : secs . (secs < 1 ? "" : " **(over 1 s)**"), Stuck: stuck = "" ? "no" : "**" . stuck . "**"}
+}
+
+EnsureVmb() {
+    if !G.Pid || !ProcessExist(G.Pid)
+        StartVmb()
+    WinActivate(Editor()), Sleep(300)
+}
+
+AutoSaveOff() {
+    for hw in WinGetControlsHwnd(Editor())
+        if WinGetClass(hw) = "Button" && ControlGetText(hw) = "Auto-save" && ControlGetChecked(hw)
+            PostMessage(0xF5, 0, 0, hw), Sleep(400)
+}
+
+FirstTypeRow() {
+    for i, r in GridRows()
+        if r[COL["action"]] = "Type"
+            return i
+    return 0
 }
 
 ; ---------------- VMB helpers ----------------
