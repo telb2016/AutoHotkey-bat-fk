@@ -1,4 +1,4 @@
-#Requires AutoHotkey v2.0
+﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
 #Warn All, StdOut
 ; V34 retest driver: items 1 (ten replays), 4 (fast typing + Enter), 6 (unsaved changes), 3 (caption button names).
@@ -15,7 +15,7 @@ global G := {Dir: "C:\Temp\vmb", Vmb: "C:\Temp\vmb\VMB34.ahk", Data: "C:\Temp\vm
     Results: "C:\Temp\vmb\retest-v34-results-" . FormatTime(, "HHmmss") . ".md", LogFile: "C:\Temp\vmb\retest-v34-log.txt",
     Macro: "C:\Temp\vmb\retest-notepad.vmacro.json", Pid: 0, Np: 0, NpPid: 0, NpKind: "", UseClip: false,
     HaveMacro: false, Plays: 10, Res: "", Done: false}
-global COL := Map("num", 1, "app", 3, "window", 4, "action", 6, "target", 7, "text", 8, "clicks", 10, "wait", 16)
+global COL := Map("num", 1, "app", 3, "window", 4, "action", 6, "target", 7, "text", 8, "clicks", 10, "wait", 16, "when", 18, "scroll", 20)
 
 #InputLevel 2
 ~Esc:: Abort("Esc pressed")
@@ -66,6 +66,10 @@ Main() {
                 case 5: Item5()
                 case 7: Item7()
                 case 8: Item8()
+                case 30: Part3()
+                case 40: Part4()
+                case 50: Part5()
+                case 60: Part6()
                 default: Log("unknown item " . it)
             }
         } catch as e {
@@ -83,23 +87,7 @@ Main() {
 ; ---------------- item 1: record once, replay ten times ----------------
 Item1() {
     Res("`n## Retest 1 - record once, replay " . G.Plays . " times`n")
-    NpPlace(0.05, 0.10, 0.45, 0.50)
-    NpClear()
-    NewMacro()
-    StartRec()
-    ed := NpEditRect()
-    MouseMove(ed.X + ed.W // 2, ed.Y + ed.H // 2), Sleep(500)
-    Click(), Sleep(500)
-    hello := {X: ed.X + 22, Y: ed.Y + 14}
-    if CaretGetPos(&cx, &cy)
-        hello := {X: cx + 14, Y: cy + 8}
-    Send("hello"), Sleep(350)
-    Send("{Enter}"), Sleep(350)
-    Send("world"), Sleep(500)
-    MouseMove(hello.X, hello.Y), Sleep(500)
-    Click(hello.X . " " . hello.Y . " 2"), Sleep(500)
-    Send("X"), Sleep(700)
-    StopRec()
+    RecordHelloWorld()
     recText := NpText()
     if recText = "" && !G.UseClip {
         G.UseClip := true
@@ -199,12 +187,16 @@ CellRect(lv, row, key) {
     rc := LvCellScreen(lv, row - 1, COL[key] - 1)
     if rc && OnScreenIn(lv, rc)
         return rc
+    SendMessage(0x1014, -10000, 0, lv), Sleep(300)
+    rc := LvCellScreen(lv, row - 1, COL[key] - 1)
+    if rc && OnScreenIn(lv, rc)
+        return rc
     t := LvCellScreen(lv, row - 1, COL["text"] - 1)
     if !t || !OnScreenIn(lv, t)
         return 0
     Click(t.X + t.W // 2 . " " . t.Y + t.H // 2), Sleep(300)
-    loop COL[key] - COL["text"]
-        Send("{Right}"), Sleep(80)
+    loop Abs(COL[key] - COL["text"])
+        Send(COL[key] > COL["text"] ? "{Right}" : "{Left}"), Sleep(80)
     Sleep(400)
     rc := LvCellScreen(lv, row - 1, COL[key] - 1)
     return rc && OnScreenIn(lv, rc) ? rc : 0
@@ -485,6 +477,618 @@ FirstTypeRow() {
     for i, r in GridRows()
         if r[COL["action"]] = "Type"
             return i
+    return 0
+}
+
+; ---------------- Part 3: scroll position ----------------
+Part3() {
+    Res("`n## Part 3 - scroll position`n")
+    NpClose(), NpOpen(false), NpPlace(0.05, 0.08, 0.40, 0.55)
+    Res("- Word Wrap: " . WordWrapOff() . "`n")
+    txt := ""
+    loop 300
+        txt .= "line " . A_Index . "`r`n"
+    saved := ClipboardAll()
+    A_Clipboard := txt
+    ClipWait(2)
+    NpClear()
+    Send("^v"), Sleep(800)
+    A_Clipboard := saved
+    e := NpEdit()
+    SendMessage(0xB6, 0, -10000, e), SendMessage(0xB6, 0, 149, e), Sleep(300)
+    first := SendMessage(0xCE, 0, 0, e) + 1
+    Res("- 300 lines pasted; top line before recording: " . first . "`n")
+    NewMacro()
+    StartRec()
+    p := LinePoint(e, first + 3)
+    MouseMove(p.X, p.Y), Sleep(500)
+    Click(), Sleep(500)
+    Send("X"), Sleep(700)
+    StopRec()
+    recLine := XLine()
+    rows := GridRows(), scroll := "(no Click row)"
+    for r in rows
+        if r[COL["action"]] = "Click"
+            scroll := r[COL["scroll"]]
+    Res("`n" . GridTable(rows) . "`n- **Scroll back** cell of the Click row: ``" . scroll . "`` (expected like ``row 150``)`n- X typed on: " . recLine . "`n")
+    WinActivate(G.Np), Sleep(200)
+    Send("^z"), Sleep(400)
+    SendMessage(0xB6, 0, -10000, e), Sleep(300)
+    Res("- After undo + scroll to top: X present = " . (XLine() = "none" ? "no" : "yes") . ", top line " . (SendMessage(0xCE, 0, 0, e) + 1) . "`n")
+    pl := Play("part 3")
+    playLine := XLine()
+    Res("- After Play: X on " . playLine . "; top line " . (SendMessage(0xCE, 0, 0, e) + 1) . "; status ``" . pl.Status . "``" . (pl.Note != "" ? " (" . pl.Note . ")" : "")
+        . "`n`n**Result: " . (playLine = recLine ? "PASS" : "FAIL") . "** (same line as when recording: " . recLine . ")`n")
+    NpClear()
+}
+
+XLine() {
+    for i, l in StrSplit(NpText(), "`n")
+        if InStr(l, "X", true)
+            return "line " . i . " (``" . l . "``)"
+    return "none"
+}
+
+LinePoint(e, line0) {
+    idx := SendMessage(0xBB, line0, 0, e)
+    pos := SendMessage(0xD6, idx, 0, e)
+    pt := Buffer(8, 0)
+    NumPut("Int", pos & 0xFFFF, pt, 0), NumPut("Int", (pos >> 16) & 0xFFFF, pt, 4)
+    DllCall("ClientToScreen", "Ptr", e, "Ptr", pt)
+    return {X: NumGet(pt, 0, "Int") + 25, Y: NumGet(pt, 4, "Int") + 7}
+}
+
+MenuText(hm, i) {
+    buf := Buffer(512, 0)
+    DllCall("GetMenuStringW", "Ptr", hm, "UInt", i, "Ptr", buf, "Int", 255, "UInt", 0x400)
+    return StrGet(buf, "UTF-16")
+}
+
+MenuFind(hm, word) {
+    loop DllCall("GetMenuItemCount", "Ptr", hm, "Int")
+        if InStr(StrReplace(MenuText(hm, A_Index - 1), "&"), word)
+            return A_Index - 1
+    return -1
+}
+
+WordWrapOff() {
+    hm := DllCall("GetMenu", "Ptr", G.Np, "Ptr")
+    if !hm || (fi := MenuFind(hm, "Format")) < 0
+        return "no Format menu (not changed)"
+    sub := DllCall("GetSubMenu", "Ptr", hm, "Int", fi, "Ptr")
+    if (wi := MenuFind(sub, "Word Wrap")) < 0
+        return "no Word Wrap item (not changed)"
+    if DllCall("GetMenuState", "Ptr", sub, "UInt", wi, "UInt", 0x400, "UInt") & 8 {
+        MenuSelect(G.Np, , "Format", "Word Wrap"), Sleep(400)
+        return "was on, turned off"
+    }
+    return "off"
+}
+
+MenuItemCenter(owner, hm, i) {
+    rc := Buffer(16, 0)
+    loop 10 {
+        if DllCall("GetMenuItemRect", "Ptr", owner, "Ptr", hm, "UInt", i, "Ptr", rc) && NumGet(rc, 8, "Int") > NumGet(rc, 0, "Int")
+            return {X: (NumGet(rc, 0, "Int") + NumGet(rc, 8, "Int")) // 2, Y: (NumGet(rc, 4, "Int") + NumGet(rc, 12, "Int")) // 2}
+        Sleep(100)
+    }
+    return 0
+}
+
+; ---------------- Part 4: what the grid knows about a click ----------------
+Part4() {
+    Res("`n## Part 4 - what the grid knows about a click`n")
+    NpClose(), NpOpen(false), NpPlace(0.10, 0.15, 0.45, 0.50)
+    WordWrapOff()
+    NewMacro()
+    StartRec()
+    done := []
+    hm := DllCall("GetMenu", "Ptr", G.Np, "Ptr")
+    ei := hm ? MenuFind(hm, "Edit") : -1
+    if ei >= 0 && (p := MenuItemCenter(G.Np, hm, ei)) {
+        ClickAt(p), done.Push("Edit menu")
+        sub := DllCall("GetSubMenu", "Ptr", hm, "Int", ei, "Ptr")
+        gi := MenuFind(sub, "Go To")
+        if gi >= 0 && WinWait("ahk_class #32768", , 2) && (q := MenuItemCenter(0, sub, gi)) {
+            ClickAt(q), done.Push("Go To...")
+            if dlg := WinWait("ahk_class #32770 ahk_pid " . G.NpPid, , 4) {
+                Sleep(500)
+                for hw in WinGetControlsHwnd(dlg)
+                    if WinGetClass(hw) = "Button" && ControlGetText(hw) = "Cancel" {
+                        r := Rect(hw)
+                        ClickAt({X: r.X + r.W // 2, Y: r.Y + r.H // 2}), done.Push("Cancel")
+                        break
+                    }
+                WinWaitClose(dlg, , 3)
+            }
+        } else
+            Send("{Esc}"), Sleep(300)
+    }
+    b := CaptionButtons(G.Np)
+    ClickAt(b.Max), WaitMinMax(1), done.Push("Maximize")
+    b := CaptionButtons(G.Np)
+    ClickAt(b.Max), WaitMinMax(0), done.Push("Restore")
+    StopRec()
+    Res("- Clicked, in order: " . JoinArr(done) . "`n`n| Clicked | Action | On what | Window |`n|---|---|---|---|`n")
+    k := 0
+    for r in GridRows() {
+        if !RegExMatch(r[COL["action"]], "i)click")
+            continue
+        k++
+        Res("| " . (k <= done.Length ? done[k] : "?") . " | " . Pipe(r[COL["action"]]) . " | " . Pipe(r[COL["target"]]) . " | " . Pipe(r[COL["window"]]) . " |`n")
+    }
+}
+
+; ---------------- Part 5: the grid as a spreadsheet ----------------
+Part5() {
+    Res("`n## Part 5 - the grid as a spreadsheet`n")
+    if !G.Np || !WinExist(G.Np)
+        NpOpen(false)
+    RecordHelloWorld()
+    path := "C:\Temp\vmb\part5-notepad.vmacro.json"
+    Res("- Setup: re-recorded the Part 2 macro (Click, hello, Enter, world, Double-click, X) and saved it as " . path . ": "
+        . (SaveAs(path) ? "saved" : "**save failed**") . "`n`n| # | Check | Result | What happened |`n|---|---|---|---|`n")
+    WinActivate(Editor()), WinMove(200, 150, , , Editor()), Sleep(600)
+    steps := [P5_Zoom, P5_Cursor, P5_Wait, P5_TextPlay, P5_Clicks, P5_Sort, P5_Filter, P5_HeadFilter, P5_Find, P5_RowMove,
+        P5_Range, P5_RowMenu, P5_HeadMenu, P5_Sideways, P5_ListGrid, P5_Restart]
+    for i, fn in steps {
+        try {
+            r := fn()
+        } catch as e {
+            r := {Ok: false, Name: fn.Name, Text: "driver error: " . e.Message}
+            CloseMenus()
+            try WinActivate(Editor())
+        }
+        Res("| " . i . " | " . r.Name . " | " . (r.Ok = "skip" ? "SKIP" : r.Ok ? "PASS" : "**FAIL**") . " | " . Pipe(r.Text) . " |`n")
+        Log("Part 5." . i . " " . r.Name . ": " . (r.Ok = "skip" ? "skip" : r.Ok ? "pass" : "FAIL") . " - " . r.Text)
+    }
+}
+
+RecordHelloWorld() {
+    NpPlace(0.05, 0.10, 0.45, 0.50)
+    NpClear()
+    NewMacro()
+    StartRec()
+    ed := NpEditRect()
+    MouseMove(ed.X + ed.W // 2, ed.Y + ed.H // 2), Sleep(500)
+    Click(), Sleep(500)
+    hello := {X: ed.X + 22, Y: ed.Y + 14}
+    if CaretGetPos(&cx, &cy)
+        hello := {X: cx + 14, Y: cy + 8}
+    Send("hello"), Sleep(350)
+    Send("{Enter}"), Sleep(350)
+    Send("world"), Sleep(500)
+    MouseMove(hello.X, hello.Y), Sleep(500)
+    Click(hello.X . " " . hello.Y . " 2"), Sleep(500)
+    Send("X"), Sleep(700)
+    StopRec()
+}
+
+ClickCell(row, key, count := 1, button := "L") {
+    rc := CellRect(GridLV(), row, key)
+    if !rc
+        throw Error("cell " . key . " of row " . row . " not on screen")
+    MouseMove(rc.X + rc.W // 2, rc.Y + rc.H // 2), Sleep(250)
+    Click(rc.X + rc.W // 2 . " " . rc.Y + rc.H // 2 . " " . button . " " . count), Sleep(450)
+    return rc
+}
+
+Undo() {
+    WinActivate(Editor()), Sleep(150)
+    Send("^z"), Sleep(700)
+}
+
+BarCtl(cls, readOnly) {
+    gr := Rect(GridLV()), best := 0, bestD := 99999
+    for hw in WinGetControlsHwnd(Editor()) {
+        if WinGetClass(hw) != cls || !ControlGetVisible(hw) || ((ControlGetStyle(hw) & 0x800) ? 1 : 0) != readOnly
+            continue
+        r := Rect(hw), d := gr.Y - (r.Y + r.H)
+        if d >= -2 && d < 80 && d < bestD
+            best := hw, bestD := d
+    }
+    return best
+}
+
+NameBox() {
+    hw := BarCtl("Edit", 1)
+    return hw ? ControlGetText(hw) : "(no name box)"
+}
+
+ZoomText() {
+    for hw in WinGetControlsHwnd(Editor())
+        if WinGetClass(hw) = "Button" && ControlGetVisible(hw) && RegExMatch(ControlGetText(hw), "^\d+%$")
+            return ControlGetText(hw)
+    return "(no zoom box)"
+}
+
+VisibleLV(cols) {
+    for hw in WinGetControlsHwnd(Editor())
+        if WinGetClass(hw) = "SysListView32" && ControlGetVisible(hw) && ListViewGetContent("Count Col", hw) = cols
+            return hw
+    return 0
+}
+
+Actions() {
+    out := []
+    for r in GridRows()
+        out.Push(r[COL["action"]])
+    return out
+}
+
+P5_Zoom() {
+    z0 := ZoomText()
+    ClickCell(3, "text")
+    gr := Rect(GridLV())
+    MouseMove(gr.X + gr.W // 2, gr.Y + gr.H // 2), Sleep(200)
+    Send("^{WheelUp}"), Sleep(400), Send("^{WheelUp}"), Sleep(600)
+    z1 := ZoomText()
+    Send("^{WheelDown}"), Sleep(600)
+    z2 := ZoomText()
+    Send("^0"), Sleep(600)
+    z3 := ZoomText()
+    return {Name: "Zoom (Ctrl+wheel, Ctrl+0)", Ok: z1 != z0 && z3 = "100%", Text: z0 . " -> 2x Ctrl+wheel up " . z1 . " -> wheel down " . z2 . " -> Ctrl+0 " . z3}
+}
+
+P5_Cursor() {
+    ClickCell(3, "text")
+    n1 := NameBox()
+    Send("{Right}"), Sleep(300)
+    n2 := NameBox()
+    Send("{Down}"), Sleep(300)
+    n3 := NameBox()
+    return {Name: "Cell cursor + arrow keys", Ok: n1 != n2 && n2 != n3, Text: "Name box: click Text row 3 = '" . n1 . "', Right = '" . n2 . "', Down = '" . n3
+        . "'. Green border colour not checked (needs eyes)."}
+}
+
+P5_Wait() {
+    r := EditCellFast(FindRow("Type", "hello"), "wait", "2")
+    return {Name: "Edit Waits first = 2", Ok: RegExMatch(r.After, "^2\s*s\*") && r.Undone != r.After, Text: "after Enter '" . r.After . "', after Ctrl+Z '" . r.Undone . "'"}
+}
+
+P5_TextPlay() {
+    row := FindRow("Type", "world")
+    ClickCell(row, "text", 2)
+    Send("^a"), Sleep(100), Send("there{Enter}"), Sleep(700)
+    cell := GridCell(row, "text")
+    NpClear()
+    pl := Play("part 5.4")
+    txt := NpText()
+    Undo()
+    back := GridCell(row, "text")
+    return {Name: "Edit Text world -> there, Play", Ok: txt == "X`nthere" && InStr(back, "world"), Text: "cell '" . cell . "', Notepad '" . Esc(txt) . "', status '"
+        . Trim(pl.Status) . "', after Ctrl+Z '" . back . "'"}
+}
+
+P5_Clicks() {
+    row := 0
+    for i, r in GridRows()
+        if r[COL["action"]] = "Click" && !row
+            row := i
+    ClickCell(row, "clicks", 2)
+    Sleep(300)
+    Send("2"), Sleep(200), Send("{Enter}"), Sleep(700)
+    act := GridCell(row, "action"), cl := GridCell(row, "clicks")
+    Undo()
+    back := GridCell(row, "action")
+    return {Name: "Clicks drop-down = 2", Ok: act = "Double-click" && back = "Click", Text: "row " . row . ": Clicks '" . cl . "', Action '" . act . "', after Ctrl+Z '" . back . "'"}
+}
+
+P5_Sort() {
+    lv := GridLV(), hdr := SendMessage(0x101F, 0, 0, lv)
+    c := LvCellScreen(lv, 0, COL["action"] - 1), h := Rect(hdr)
+    MouseMove(c.X + 15, h.Y + h.H // 2), Sleep(300)
+    Click(), Sleep(800)
+    a := Actions(), sorted := true
+    loop a.Length - 1
+        if StrCompare(a[A_Index], a[A_Index + 1]) > 0
+            sorted := false
+    Btn("Step order"), Sleep(600)
+    nums := "", inOrder := true
+    for i, r in GridRows()
+        nums .= r[1] . " ", inOrder := inOrder && r[1] = i
+    return {Name: "Sort by Action, then Step order", Ok: sorted && inOrder, Text: "after header click: " . JoinArr(a) . " | after Step order: # " . Trim(nums)}
+}
+
+P5_Filter() {
+    f := BarCtl("Edit", 0)
+    if !f
+        return {Name: "Filter box 'type'", Ok: false, Text: "filter box not found"}
+    r := Rect(f)
+    ClickAt({X: r.X + r.W // 2, Y: r.Y + r.H // 2})
+    Send("type"), Sleep(900)
+    a := Actions(), allType := a.Length > 0
+    for v in a
+        allType := allType && v = "Type"
+    Btn("Clear"), Sleep(600)
+    n := GridRows().Length
+    return {Name: "Filter box 'type', Clear", Ok: allType && n > a.Length, Text: "rows shown: " . JoinArr(a) . " | after Clear: " . n . " rows"}
+}
+
+P5_HeadFilter() {
+    fz := VisibleLV(2), note := ""
+    if fz {
+        pop := OpenArrow(fz, 1)
+        note := "Action arrow (frozen pane): " . (pop ? "tick list opened" : "**no tick list** (" . G.ArrowNote . ")") . ". "
+        if pop
+            BoxBtn(pop, "Cancel"), Sleep(400)
+    }
+    lv := GridLV()
+    SendMessage(0x1014, -10000, 0, lv), Sleep(300)
+    pop := OpenArrow(lv, COL["target"] - 1)
+    if !pop
+        return {Name: "Header filter arrow", Ok: false, Text: note . "On what arrow (main grid): no tick list either (" . G.ArrowNote . ")"}
+    plv := 0
+    for hw in WinGetControlsHwnd(pop)
+        if WinGetClass(hw) = "SysListView32"
+            plv := hw
+    items := StrSplit(ListViewGetContent("", plv), "`n", "`r"), idx := 0, want := "a text box"
+    for i, t in items
+        if t = want
+            idx := i
+    if !idx {
+        BoxBtn(pop, "Cancel")
+        return {Name: "Header filter arrow", Ok: false, Text: note . "On what tick list: " . JoinArr(items) . " (no '" . want . "')"}
+    }
+    ControlFocus(plv), Sleep(150)
+    Send("{Home}"), Sleep(100)
+    loop idx - 1
+        Send("{Down}"), Sleep(60)
+    Send("{Space}"), Sleep(300)
+    BoxBtn(pop, "OK"), Sleep(800)
+    a := Actions(), gone := true
+    for v in a
+        gone := gone && !InStr(v, "Click")
+    Btn("Clear"), Sleep(600)
+    n := GridRows().Length
+    return {Name: "Header filter arrow (On what: untick 'a text box')", Ok: gone && n > a.Length, Text: note . "On what tick list: " . JoinArr(items)
+        . " | after OK: " . JoinArr(a) . " | after Clear: " . n . " rows"}
+}
+
+OpenArrow(lv, col0) {
+    hdr := SendMessage(0x101F, 0, 0, lv)
+    c := LvCellScreen(lv, 0, col0), h := Rect(hdr)
+    if !c
+        return 0
+    before := WinGetList("ahk_pid " . G.Pid)
+    MouseMove(c.X + c.W - 7, h.Y + h.H // 2), Sleep(300)
+    Click()
+    t0 := A_TickCount
+    while A_TickCount - t0 < 1500 {
+        for w in WinGetList("ahk_pid " . G.Pid) {
+            isNew := true
+            for o in before
+                isNew := isNew && o != w
+            if isNew && WinGetClass(w) != "tooltips_class32"
+                return w
+        }
+        Sleep(50)
+    }
+    G.ArrowNote := "status after click '" . Trim(StatusText()) . "'"
+    return 0
+}
+
+P5_Find() {
+    ClickCell(1, "text")
+    Send("^f"), Sleep(600)
+    Send("world"), Sleep(200), Send("{Enter}"), Sleep(700)
+    n := NameBox(), st := StatusText()
+    Send("{Esc}"), Sleep(400)
+    row := FindRow("Type", "world")
+    return {Name: "Find (Ctrl+F world Enter, Esc)", Ok: InStr(n, String(row)) > 0, Text: "Name box '" . n . "' (world is row " . row . "), status '" . Trim(st) . "'"}
+}
+
+P5_RowMove() {
+    row := FindRow("Type", "hello")
+    ClickCell(row, "app")
+    Send("!{Down}"), Sleep(800)
+    moved := InStr(GridCell(row + 1, "text"), "hello")
+    Undo()
+    back := InStr(GridCell(row, "text"), "hello")
+    return {Name: "Alt+Down moves the row, Ctrl+Z", Ok: moved && back, Text: "hello row " . row . " -> " . (moved ? row + 1 : "not moved") . "; after Ctrl+Z back at " . row . ": " . (back ? "yes" : "no")}
+}
+
+P5_Range() {
+    before := []
+    for r in GridRows()
+        before.Push(r[COL["wait"]])
+    ClickCell(2, "wait")
+    Send("+{Down 2}"), Sleep(500)
+    st := StatusText()
+    Send("{Delete}"), Sleep(700)
+    st2 := StatusText()
+    mid := GridCell(2, "wait") . "/" . GridCell(3, "wait") . "/" . GridCell(4, "wait")
+    orig := before[2] . "/" . before[3] . "/" . before[4]
+    if mid = orig {
+        Send("{Esc}"), Sleep(300)
+        return {Name: "Range Shift+Down x2, Delete, Ctrl+Z", Ok: false, Text: "status '" . Trim(st) . "'; Waits rows 2-4: " . orig . " -> after Delete unchanged " . mid
+            . "; status after Delete '" . Trim(st2) . "' (Ctrl+Z not pressed, so the recording is not undone)"}
+    }
+    Undo()
+    after := GridCell(2, "wait") . "/" . GridCell(3, "wait") . "/" . GridCell(4, "wait")
+    return {Name: "Range Shift+Down x2, Delete, Ctrl+Z", Ok: InStr(st, "3") && mid != orig && after = orig, Text: "status '" . Trim(st) . "'; Waits rows 2-4: " . orig . " -> Delete " . mid . " -> Ctrl+Z " . after}
+}
+
+P5_RowMenu() {
+    ClickCell(3, "app", 1, "R")
+    items := MenuItems()
+    CloseMenus()
+    ok := InStr(items, "Insert") && InStr(items, "Duplicate") && InStr(items, "Delete") && InStr(items, "Move")
+    return {Name: "Right-click a row: menu", Ok: ok ? true : false, Text: items = "" ? "no menu" : items}
+}
+
+P5_HeadMenu() {
+    lv := GridLV(), hdr := SendMessage(0x101F, 0, 0, lv)
+    c := LvCellScreen(lv, 0, COL["target"] - 1), h := Rect(hdr)
+    MouseMove(c.X + 20, h.Y + h.H // 2), Sleep(300)
+    Click("Right"), Sleep(300)
+    items := MenuItems()
+    CloseMenus()
+    return {Name: "Right-click a column title: column list", Ok: InStr(items, "Action") && InStr(items, "Waits first") ? true : false, Text: items = "" ? "no menu" : SubStr(items, 1, 400)}
+}
+
+MenuItems() {
+    if !(mw := WinWait("ahk_class #32768", , 3))
+        return ""
+    Sleep(300)
+    hm := SendMessage(0x1E1, 0, 0, mw)
+    out := ""
+    loop DllCall("GetMenuItemCount", "Ptr", hm, "Int") {
+        t := MenuText(hm, A_Index - 1)
+        if t != ""
+            out .= (out = "" ? "" : " / ") . StrReplace(t, "`t", " ")
+    }
+    return out
+}
+
+P5_Sideways() {
+    lv := GridLV(), gr := Rect(lv)
+    SendMessage(0x1014, 4000, 0, lv), Sleep(700)
+    numCell := LvCellScreen(lv, 0, 0) || {X: "?"}
+    fz := VisibleLV(2), fr := fz ? Rect(fz) : 0
+    content := fz ? StrSplit(ListViewGetContent("", fz), "`n", "`r") : []
+    SendMessage(0x1014, -8000, 0, lv), Sleep(500)
+    ok := fz && fr.X <= gr.X + 4 && numCell.X < gr.X && content.Length
+    return {Name: "Sideways scroll keeps # and Action", Ok: ok ? true : false, Text: "grid scrolled (main # column now at x=" . numCell.X . ", grid left " . gr.X . "); frozen pane "
+        . (fz ? "visible at x=" . fr.X . " w=" . fr.W . ", first row '" . (content.Length ? StrReplace(content[1], "`t", " | ") : "") . "'" : "not found")}
+}
+
+P5_ListGrid() {
+    lb := 0, gb := 0
+    for hw in WinGetControlsHwnd(Editor())
+        if WinGetClass(hw) = "Button" && ControlGetVisible(hw) && Rect(hw).W < 60 {
+            t := ControlGetText(hw)
+            lb := t = "List" ? hw : lb, gb := t = "Grid" ? hw : gb
+        }
+    if !lb || !gb
+        return {Name: "List view, then Grid", Ok: false, Text: "List / Grid buttons not found"}
+    n := GridRows().Length
+    PostMessage(0xF5, 0, 0, lb), Sleep(800)
+    tv := 0
+    for hw in WinGetControlsHwnd(Editor())
+        if WinGetClass(hw) = "SysTreeView32" && ControlGetVisible(hw)
+            tv := hw
+    cnt := tv ? SendMessage(0x1105, 0, 0, tv) : -1
+    PostMessage(0xF5, 0, 0, gb), Sleep(800)
+    n2 := GridRows().Length
+    return {Name: "List view, then Grid", Ok: tv && cnt = n && n2 = n, Text: "grid rows " . n . "; List view tree items " . cnt . "; back in Grid " . n2 . " rows"}
+}
+
+P5_Restart() {
+    ClickCell(3, "text")
+    Send("^="), Sleep(600)
+    z := ZoomText(), lv := GridLV(), w1 := ""
+    loop 8
+        w1 .= SendMessage(0x101D, A_Index - 1, 0, lv) . " "
+    rows1 := ListViewGetContent("", lv)
+    WinClose(Editor()), Sleep(2000)
+    pid := G.Pid
+    Send("^+x")
+    ProcessWaitClose(pid, 5)
+    if ProcessExist(pid)
+        ProcessClose(pid)
+    StartVmb()
+    WinActivate(Editor()), WinMove(200, 150, , , Editor()), Sleep(800)
+    z2 := ZoomText(), lv := GridLV(), w2 := ""
+    loop 8
+        w2 .= SendMessage(0x101D, A_Index - 1, 0, lv) . " "
+    rows2 := ListViewGetContent("", lv), same := rows2 == rows1, diff := ""
+    if !same {
+        a1 := StrSplit(rows1, "`n", "`r"), a2 := StrSplit(rows2, "`n", "`r")
+        loop Min(a1.Length, a2.Length) {
+            c1 := StrSplit(a1[A_Index], "`t"), c2 := StrSplit(a2[A_Index], "`t")
+            loop Min(c1.Length, c2.Length)
+                if c1[A_Index] != c2[A_Index] && StrLen(diff) < 300
+                    diff .= " [col " . A_Index . ": '" . c1[A_Index] . "' -> '" . c2[A_Index] . "']"
+        }
+        diff := " rows " . a1.Length . " -> " . a2.Length . ";" . diff
+    }
+    ClickCell(3, "text"), Send("^0"), Sleep(500)
+    return {Name: "Restart keeps zoom, widths, macro", Ok: z2 = z && w2 = w1 && same, Text: "zoom " . z . " -> " . z2 . "; widths of first 8 columns " . Trim(w1) . " -> " . Trim(w2)
+        . "; grid text identical: " . (same ? "yes" : "no:" . diff) . "; title '" . WinGetTitle(Editor()) . "'. (Closed with X, then Ctrl+Shift+X, then started with --data.)"}
+}
+
+; ---------------- Part 6: repeat for a list ----------------
+Part6() {
+    Res("`n## Part 6 - repeat for a list`n")
+    if !G.Np || !WinExist(G.Np)
+        NpOpen(false)
+    NpPlace(0.05, 0.10, 0.45, 0.50)
+    NpClear()
+    NewMacro()
+    StartRec()
+    ed := NpEditRect()
+    MouseMove(ed.X + ed.W // 2, ed.Y + ed.H // 2), Sleep(500)
+    Click(), Sleep(500)
+    Send("Smith"), Sleep(350), Send("{Tab}"), Sleep(350), Send("250"), Sleep(350), Send("{Enter}"), Sleep(700)
+    StopRec()
+    Res("`nRecorded:`n`n" . GridTable(GridRows()) . "`n")
+    SheetTab("List")
+    saved := ClipboardAll()
+    A_Clipboard := "Name`tAmount`r`nSmith`t250`r`nJones`t75`r`nLee`t5`r`n"
+    ClipWait(2)
+    Btn("Paste list")
+    A_Clipboard := saved
+    if box := WaitBox("use the list columns", 4000) {
+        Res("- Question: ``" . Flat(WinGetText(box)) . "`` -> Yes`n")
+        BoxBtn(box, "&Yes")
+    } else
+        Res("- **No question about the list columns appeared.**`n")
+    Sleep(800)
+    Res("- Status after paste: ``" . StatusText() . "```n")
+    SheetTab("Steps")
+    texts := []
+    for r in GridRows()
+        if r[COL["action"]] = "Type"
+            texts.Push(r[COL["text"]])
+    Res("- Type rows' Text cells: ``" . JoinArr(texts) . "`` (expected ``=Name → 'Smith'``, ``=Amount → '250'``)`n")
+    radio := 0
+    for hw in WinGetControlsHwnd(Editor())
+        if WinGetClass(hw) = "Button" && ControlGetVisible(hw) && InStr(ControlGetText(hw), "for each row of the List")
+            radio := hw
+    if !radio
+        return Res("- **Run: for each row of the List** not found; stopped here.`n")
+    rtext := ControlGetText(radio)
+    PostMessage(0xF5, 0, 0, radio), Sleep(600)
+    Res("- Run switch: ``" . rtext . "`` chosen = " . (ControlGetChecked(radio) ? "yes" : "**no**") . "`n")
+    NpClear()
+    pl := Play("part 6 list run")
+    t1 := NpText()
+    want := "Smith`t250`nJones`t75`nLee`t5`n"
+    Res("- Notepad after the list run: ``" . Esc(t1) . "`` (expected ``Smith\t250\nJones\t75\nLee\t5\n``): " . (t1 == want ? "**PASS**" : "**FAIL**")
+        . "`n- Status: ``" . Trim(pl.Status) . "``" . (pl.Note != "" ? " (" . pl.Note . ")" : "") . "`n")
+    SheetTab("List")
+    llv := VisibleLVAny()
+    Res("- List sheet after the run (# / Result / Name / Amount):`n`n``````text`n" . (llv ? ListViewGetContent("", llv) : "(list not found)") . "`n```````n")
+    SheetTab("Steps")
+    row := FindRow("Type", "Amount")
+    if !row
+        return Res("- No =Amount Type row; Only when not tested.`n")
+    ClickCell(row, "when", 2)
+    Send("^a"), Sleep(100), Send("Amount > 100{Enter}"), Sleep(800)
+    Res("- Only when cell of row " . row . ": ``" . GridCell(row, "when") . "``; status ``" . Trim(StatusText()) . "```n")
+    NpClear()
+    pl := Play("part 6 only when")
+    t2 := NpText()
+    want2 := "Smith`t250`nJones`t`nLee`t`n"
+    Res("- Notepad after the run with Only when: ``" . Esc(t2) . "`` (expected the amount only on the Smith line): "
+        . (t2 == want2 ? "**PASS**" : "check") . "`n- Status: ``" . Trim(pl.Status) . "```n")
+    NpClear()
+}
+
+SheetTab(name) {
+    for hw in WinGetControlsHwnd(Editor())
+        if WinGetClass(hw) = "Button" && ControlGetVisible(hw) && Rect(hw).W >= 80 && RegExMatch(ControlGetText(hw), "^" . name . "( \(\d+\))?$") {
+            PostMessage(0xF5, 0, 0, hw)
+            return Sleep(700)
+        }
+    throw Error("Sheet tab not found: " . name)
+}
+
+VisibleLVAny() {
+    for hw in WinGetControlsHwnd(Editor())
+        if WinGetClass(hw) = "SysListView32" && ControlGetVisible(hw) && ListViewGetContent("Count Col", hw) != 25 && ListViewGetContent("Count Col", hw) != 2
+            return hw
     return 0
 }
 

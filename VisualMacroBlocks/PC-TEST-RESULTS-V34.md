@@ -145,11 +145,65 @@ PASS | Folder: can write to C:\Temp\vmb\data (run history works).
 ```
 (Fonts CHECK is the known one.)
 
+## Part 3 - scroll position: PASS
+- Classic Notepad, Word Wrap off, 300 lines pasted, scrolled so line 150 is at the top.
+- Recorded: Window / Click "a text box" / Type "X". **Scroll back** cell of the Click row: `row 150`.
+- X typed on line 154 when recording. Undo X, scroll Notepad to the top (line 1), Play: Notepad scrolled back to line 150
+  and X landed on line 154 again. Status `Finished.`
+
+## Part 4 - what the grid knows about a click: PASS
+
+| Clicked | Action | On what | Window |
+|---|---|---|---|
+| Edit menu | Click | menu "Edit" | main window |
+| Go To... | Click | menu item "Go To..." | menu |
+| Cancel (Go To Line box) | Click | the "Cancel" button | dialog |
+| Maximize | Click | the Maximize button | main window |
+| Restore | Click | the Restore button | main window |
+
+## Part 5 - the grid as a spreadsheet: 13 PASS, 1 FAIL, 1 finding, 1 PASS with a note
+Setup: the Part 2 macro re-recorded and saved as `C:\Temp\vmb\part5-notepad.vmacro.json`; editor at 200,150.
+
+| # | Check | Result | What happened |
+|---|---|---|---|
+| 1 | Zoom | PASS | 100% -> Ctrl+wheel up x2 120% -> wheel down 110% -> Ctrl+0 100% |
+| 2 | Cell cursor + arrows | PASS | Name box: `Text / keys · step 3` -> Right `Button · step 3` -> Down `Button · step 4`. Green border colour not checked (needs eyes). |
+| 3 | Waits first = 2 | PASS | `2 s*`; Ctrl+Z back to `531 ms` |
+| 4 | Text world -> there, Play | PASS | cell `"there"`, Notepad `X\nthere`, `Finished.`, Ctrl+Z back to `"world"` |
+| 5 | Clicks drop-down = 2 | PASS | Action became `Double-click`; Ctrl+Z back to `Click` |
+| 6 | Sort by Action / Step order | PASS | Click, Double-click, Press, Type, Type, Type, Window; Step order -> # 1..7 |
+| 7 | Filter `type` / Clear | PASS | only the 3 Type rows; Clear -> 7 rows |
+| 8 | Header filter arrow | **FAIL** | A left click 7 px inside the right edge of the **Action** title (frozen pane) and of the **On what** title (main grid) opened no tick list (watched 1.5 s for any new window). Status stayed `Grid view: all 7 steps, in step order.` The arrow zone is the right 18 px (`V32_HitArrow`). Sorting with a click near the left of the title works. Please check by hand; the Action column now lives in the frozen pane, and `V32_HeaderHit` measures `s.GridLV`'s header. |
+| 9 | Find | PASS | Ctrl+F `world` Enter -> `Find: match 1 of 1 - row 5, Text / keys.` |
+| 10 | Alt+Down / Ctrl+Z | PASS | hello row 3 -> 4, back to 3 |
+| 11 | Range + Delete | **finding** | Shift+Down x2 on Waits first -> status `3 cells   Ctrl+C copies, Ctrl+V pastes, Ctrl+D fills down, Delete clears.` Delete -> `Cleared 0 cells.`; the recorded waits (300 ms / 531 ms / 453 ms) stay. Recorded gaps are not clearable (`V31_Clearable` / `V31_ClearKey`), only hand-set waits. If intended, the status could say why (e.g. "recorded waits cannot be cleared"). |
+| 12 | Row right-click menu | PASS | Insert step above / Insert step below / Duplicate row / Delete row / Move up / Move down / Turn off / on / More step actions... |
+| 13 | Header right-click menu | PASS | all 25 column names + Freeze # and Action + Reset columns |
+| 14 | Sideways scroll | PASS | main grid scrolled (its # column at x=-1174); frozen pane stays at the grid's left (w=140) showing `1 / Window` |
+| 15 | List, then Grid | PASS | 7 grid rows = 7 tree items = 7 rows back in Grid |
+| 16 | Restart (X, Ctrl+Shift+X, start with --data) | PASS with a note | zoom 110% kept, widths kept (44 242 121 132 121 110 220 242), same macro and same cells except **Last run**: `ok` -> `not run yet` on all 7 rows, although the run history file `data\history\part5-notepad.vmacro-*.runs.csv` exists. Intended? |
+
+## Part 6 - repeat for a list: PASS
+- Recorded: Window / Click / Type "Smith" / Press Tab / Type "250" / Press Enter.
+- Paste list (Name, Amount; Smith 250, Jones 75, Lee 5) -> question
+  `Step 3 types "Smith", which is row 1 of column Name. Use the Name column there? (The same for 1 more step.)` -> Yes.
+  Status `2 Type steps now use a list column. Ctrl+Z on the Steps sheet puts the text back.`
+- Text cells: `=Name → "Smith"`, `=Amount → "250"`.
+- Run: `for each row of the List (3 rows)` -> Notepad `Smith\t250\nJones\t75\nLee\t5\n`; status `3 rows: 3 done.`;
+  List sheet Result column `done` / `done` / `done`.
+- Only when `Amount > 100` on the =Amount row -> Notepad `Smith\t250\nJones\t\nLee\t\n` (amount only on the Smith line); `3 rows: 3 done.`
+
+## Part 7 - what could not be done
+- Colour checks (Part 5.2 green border; any drawing glitches) - the driver reads controls, not colours. No screenshots were taken.
+- Part 5.8 header filter arrow - see above; needs one try by hand.
+- Part 3 on the Windows 11 tabbed Notepad - this PC uses classic Notepad.
+- Method note: all clicks/keys came from a second AutoHotkey process (SendLevel 1); buttons were pressed with BM_CLICK.
+
 ## Still open
+- Part 5.8 (header filter arrow), Part 5.11 (Delete on recorded waits), Part 5.16 (Last run after restart).
 - Findings 2 (ControlClick on "Save &as...") and 3 (`notepad?`) above, and the desktop-dependent self-test check.
-- Not done yet: Parts 3-7 of WORK-AI-TEST-INSTRUCTIONS.md (Part 2 was covered by retest 1).
 
 ## Files created on the PC (all in C:\Temp\vmb)
 part1-selftest.ahk, retest-v34.ahk (= pc-tests/retest-v34.ahk), probe-windows.ahk, probe-saveas.ahk, probe-panicexit.ahk,
-VMB34.ahk, VMB34-prev.ahk, selftest.txt, selftest-prev.txt, retest-notepad.vmacro.json, retest-v34-results*.md,
+VMB34.ahk, VMB34-prev.ahk, selftest.txt, selftest-prev.txt, retest-notepad.vmacro.json, part5-notepad.vmacro.json, retest-v34-results*.md,
 retest-v34-log.txt, data\ (ini, autosave draft, last-playback.log). `VMB33.ahk` was already there (not made by this test).
